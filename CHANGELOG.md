@@ -1,5 +1,17 @@
 # Ghost Arcade - Development Changelog
 
+## Mapper 0.2.0 — performance and calibration
+
+- Replaced the 30fps timer and three GPU source uploads with display-refresh
+  presentation, direct RGBA texture input, a shared GPU context and cached geometry.
+- Added QLab-inspired perspective/linear/Bézier controls, a larger editor,
+  editable splits and point coordinates, keyboard nudging, edge/region dragging,
+  and warped blend-zone guides extending beyond the route boundary.
+- Added independent draggable seams, automatic/manual blends, blend gamma,
+  and individual per-projector resets for mesh, mask, colors and all calibration.
+- Removed unused NDI UWP/DirectShow DLLs, unused packaged Three.js source and
+  extra Electron locales. Existing rigs remain importable.
+
 ## Fork prototype — Three Projector Mapper (November 3, 2026)
 
 - Added the separate `mapper/` application with a wide-canvas input preview,

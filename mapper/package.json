@@ -1,6 +1,6 @@
 {
   "name": "three-projector-mapper",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "license": "AGPL-3.0-only",
   "type": "module",
@@ -13,15 +13,13 @@
     "native:build": "cmake-js compile --directory native --arch x64",
     "package:win": "npm run build && node scripts/check-native.cjs && electron-builder --win --x64 --publish never"
   },
-  "dependencies": {
-    "three": "0.184.0"
-  },
   "devDependencies": {
     "@types/three": "^0.184.0",
     "cmake-js": "^8.0.0",
     "electron": "^42.0.0",
     "electron-builder": "^26.8.1",
     "node-addon-api": "^8.3.1",
+    "three": "0.184.0",
     "typescript": "^5.9.3",
     "vite": "^7.3.1",
     "vitest": "^4.1.0"
@@ -44,8 +42,20 @@
       "native/**/*.node"
     ],
     "extraFiles": [
-      { "from": "bundle/runtime", "to": ".", "filter": ["*.dll"] },
-      { "from": "bundle/licenses", "to": "third-party", "filter": ["**/*"] }
+      {
+        "from": "bundle/runtime",
+        "to": ".",
+        "filter": [
+          "*.dll"
+        ]
+      },
+      {
+        "from": "bundle/licenses",
+        "to": "third-party",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "win": {
       "target": [
@@ -60,6 +70,9 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
-    }
+    },
+    "electronLanguages": [
+      "en-US"
+    ]
   }
 }

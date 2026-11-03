@@ -1,41 +1,29 @@
-// Reduced projector pipeline, adapted from Ghost Arcade's Three.js geometry
-// and GPU output blend approach. Geometry lives in projector coordinates;
-// UVs independently select a region of the shared input canvas.
+// One GPU context and one source upload shared by all three projectors.
 import * as THREE from 'three';
-import { GRID, layout, type Projector, type Rig } from './rig';
-export class ProjectorRenderer {
-  readonly renderer: THREE.WebGLRenderer;
-  private geometry = new THREE.BufferGeometry();
-  private material: THREE.ShaderMaterial;
-  private scene = new THREE.Scene();
-  private camera = new THREE.Camera();
-  private texture: THREE.CanvasTexture;
-  private sourceWidth: number;
-  private sourceHeight: number;
-  constructor(readonly canvas: HTMLCanvasElement, source: HTMLCanvasElement) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: false, preserveDrawingBuffer: false });
-    this.renderer.setSize(1920, 1080, false);
-    this.renderer.setClearColor(0x000000, 1);
-    this.texture = new THREE.CanvasTexture(source);
-    this.sourceWidth = source.width; this.sourceHeight = source.height;
-    this.texture.minFilter = this.texture.magFilter = THREE.LinearFilter;
-    this.texture.generateMipmaps = false;
-    const indices: number[] = [];
-    for (let y = 0; y < GRID - 1; y++) for (let x = 0; x < GRID - 1; x++) {
-      const a = y * GRID + x; indices.push(a, a + GRID, a + 1, a + 1, a + GRID, a + GRID + 1);
-    }
-    this.geometry.setIndex(indices);
-    this.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(GRID * GRID * 3), 3));
-    this.geometry.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(GRID * GRID * 2), 2));
-    this.material = new THREE.ShaderMaterial({
-      side: THREE.DoubleSide, depthTest: false, depthWrite: false,
-      uniforms: { picture: { value: this.texture }, crop: { value: new THREE.Vector2() }, edges: { value: new THREE.Vector2() }, correction: { value: new THREE.Vector3() }, masks: { value: Array.from({ length: 4 }, () => new THREE.Vector2()) } },
-      vertexShader: `varying vec2 local; varying vec2 target;
-        void main(){local=uv; target=vec2(position.x*.5+.5,.5-position.y*.5); gl_Position=vec4(position,1.);}`,
+import { layout, sourceRect, type Projector, type Rig } from './rig';
+import { dimensions, sampleWarp } from './warp';
+type Backend = { renderer: THREE.WebGLRenderer; texture: THREE.Texture; dataMode: boolean; material: THREE.ShaderMaterial; width: number; height: number; revision: number; users: number };
+const backends = new WeakMap<HTMLCanvasElement, Backend>();
+function textureFor(source: HTMLCanvasElement) {
+  const texture = new THREE.CanvasTexture(source);
+  texture.minFilter = texture.magFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false; return texture;
+}
+function backendFor(source: HTMLCanvasElement): Backend {
+  const existing = backends.get(source); if (existing) { existing.users++; return existing; }
+  const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false });
+  renderer.setSize(1920, 1080, false); renderer.setClearColor(0x000000, 1);
+  renderer.debug.onShaderError = () => { throw Error('Projector shader failed to compile.'); };
+  const texture = textureFor(source);
+  const material = new THREE.ShaderMaterial({
+    side: THREE.DoubleSide, depthTest: false, depthWrite: false,
+    uniforms: { content: { value: new THREE.Vector4(0,0,1,1) }, sourceFlip: { value: 1 }, picture: { value: texture }, crop: { value: new THREE.Vector2() }, edges: { value: new THREE.Vector2() }, correction: { value: new THREE.Vector3() }, blendPower: { value: 1 }, masks: { value: Array.from({ length: 4 }, () => new THREE.Vector2()) } },
+      vertexShader: `attribute float warpW; varying vec2 local;
+        void main(){local=uv; gl_Position=vec4(position.xy*warpW,0.,warpW);}`,
       fragmentShader: `precision highp float;
-        uniform sampler2D picture; uniform vec2 crop; uniform vec2 edges;
-        uniform vec3 correction; uniform vec2 masks[4]; varying vec2 local; varying vec2 target;
-        void main(){
+        uniform sampler2D picture; uniform vec4 content; uniform float sourceFlip; uniform vec2 crop; uniform vec2 edges;
+        uniform vec3 correction; uniform float blendPower; uniform vec2 masks[4]; varying vec2 local;
+        void main(){vec2 target=vec2(gl_FragCoord.x/1920.,1.-gl_FragCoord.y/1080.);
           bool inside=false;
           for(int i=0;i<4;i++){vec2 a=masks[i]; vec2 b=masks[(i+1)-((i+1)/4)*4];
             if((a.y>target.y)!=(b.y>target.y)){
@@ -43,39 +31,89 @@ export class ProjectorRenderer {
             }
           }
           if(!inside){gl_FragColor=vec4(0.,0.,0.,1.);return;}
-          vec2 p=vec2(crop.x+local.x*crop.y,1.-local.y);
+          vec2 p=vec2(crop.x+local.x*crop.y,local.y);
+          p=(p-content.xy)/content.zw;
+          if(any(lessThan(p,vec2(0.)))||any(greaterThan(p,vec2(1.)))){gl_FragColor=vec4(0.,0.,0.,1.);return;}
+          if(sourceFlip>0.5)p.y=1.-p.y;
           vec4 sampleColor=texture2D(picture,p);
           vec3 color=pow(max(sampleColor.rgb,vec3(0.)),vec3(2.2))*sampleColor.a;
           float weight=1.;
           if(edges.x>0.)weight*=smoothstep(0.,edges.x,local.x);
           if(edges.y>0.)weight*=smoothstep(0.,edges.y,1.-local.x);
+          weight=pow(weight,blendPower);
           color=color*correction.x*weight+vec3(correction.z*weight);
           gl_FragColor=vec4(pow(clamp(color,0.,1.),vec3(1./correction.y)),1.);
         }`
-    });
-    const mesh = new THREE.Mesh(this.geometry, this.material); mesh.frustumCulled = false; this.scene.add(mesh);
+  });
+  const backend:Backend = { renderer, texture, material, dataMode: false, width: source.width, height: source.height, revision: -1, users: 1 };
+  backends.set(source, backend); return backend;
+}
+export class ProjectorRenderer {
+  private backend: Backend;
+  private geometry = new THREE.BufferGeometry();
+  private scene = new THREE.Scene();
+  private camera = new THREE.Camera();
+  private context: CanvasRenderingContext2D;
+  private meshKey = '';
+  constructor(readonly canvas: HTMLCanvasElement, private source: HTMLCanvasElement) {
+    canvas.width = 1920; canvas.height = 1080;
+    this.context = canvas.getContext('2d', { alpha: false })!;
+    this.backend = backendFor(source);
+    const mesh = new THREE.Mesh(this.geometry, this.backend.material); mesh.frustumCulled = false; this.scene.add(mesh);
   }
-  render(output: Projector, index: number, rig: Rig, blackout: boolean) {
-    const source = this.texture.image as HTMLCanvasElement;
-    if (source.width !== this.sourceWidth || source.height !== this.sourceHeight) {
-      this.texture.dispose(); this.texture = new THREE.CanvasTexture(source);
-      this.texture.minFilter = this.texture.magFilter = THREE.LinearFilter;
-      this.texture.generateMipmaps = false;
-      this.sourceWidth = source.width; this.sourceHeight = source.height;
-      this.material.uniforms.picture.value = this.texture;
+  setInputFrame(data:Uint8Array, width:number, height:number) {
+    const b=this.backend;
+    if(!b.dataMode||b.width!==width||b.height!==height){
+      b.texture.dispose();const texture=new THREE.DataTexture(data,width,height,THREE.RGBAFormat);
+      texture.minFilter=texture.magFilter=THREE.LinearFilter;texture.generateMipmaps=false;
+      b.texture=texture;b.material.uniforms.picture.value=texture;b.width=width;b.height=height;b.dataMode=true;
+    }else{(b.texture as THREE.DataTexture).image.data=data;}
+    b.texture.needsUpdate=true;
+  }
+  useCanvas(){
+    const b=this.backend;if(!b.dataMode)return;
+    b.texture.dispose();b.texture=textureFor(this.source);b.width=this.source.width;b.height=this.source.height;b.material.uniforms.picture.value=b.texture;b.dataMode=false;b.revision=-1;
+  }
+  render(output: Projector, index: number, rig: Rig, blackout: boolean, revision: number) {
+    const b = this.backend;
+    if (!b.dataMode && (this.source.width !== b.width || this.source.height !== b.height)) {
+      b.texture.dispose(); b.texture = textureFor(this.source);
+      b.material.uniforms.picture.value = b.texture;
+      b.width = this.source.width; b.height = this.source.height; b.revision = -1;
     }
-    const pos = this.geometry.getAttribute('position') as THREE.BufferAttribute;
-    const uv = this.geometry.getAttribute('uv') as THREE.BufferAttribute;
-    output.mesh.forEach((p, i) => { pos.setXYZ(i, p.x * 2 - 1, 1 - p.y * 2, 0); uv.setXY(i, (i % GRID) / (GRID - 1), Math.floor(i / GRID) / (GRID - 1)); });
-    pos.needsUpdate = uv.needsUpdate = true;
-    const l = layout(rig.overlap), u = this.material.uniforms;
+    if (!b.dataMode && b.revision !== revision) { b.texture.needsUpdate = true; b.revision = revision; }
+    const key = JSON.stringify([output.warpType, output.meshCols, output.meshRows, output.mesh]);
+    if (key !== this.meshKey) {
+      const dim=dimensions(output);
+      const cols=output.warpType==='perspective'?2:output.warpType==='bezier'?33:Math.max(9,dim.cols);
+      const rows=output.warpType==='perspective'?2:output.warpType==='bezier'?33:Math.max(9,dim.rows);
+      const pos=new Float32Array(cols*rows*3), uv=new Float32Array(cols*rows*2), weights=new Float32Array(cols*rows), indices:number[]=[];
+      for(let y=0;y<rows;y++) for(let x=0;x<cols;x++) {
+        const i=y*cols+x, u=x/(cols-1), v=y/(rows-1), p=sampleWarp(output,u,v);
+        pos[i*3]=p.x*2-1;pos[i*3+1]=1-p.y*2;uv[i*2]=u;uv[i*2+1]=v;weights[i]=p.w;
+        if(x<cols-1&&y<rows-1)indices.push(i,i+cols,i+1,i+1,i+cols,i+cols+1);
+      }
+      this.geometry.setIndex(indices);
+      this.geometry.setAttribute('position',new THREE.BufferAttribute(pos,3));
+      this.geometry.setAttribute('uv',new THREE.BufferAttribute(uv,2));
+      this.geometry.setAttribute('warpW',new THREE.BufferAttribute(weights,1));
+      this.meshKey = key;
+    }
+    const l = layout(rig.overlap,rig.rightOverlap??rig.overlap), u = b.material.uniforms;
     u.crop.value.set(l.starts[index] / l.width, 1920 / l.width);
+    const bounds=b.dataMode?sourceRect(b.width,b.height,l.width,1080,rig.fit):{x:0,y:0,w:l.width,h:1080};
+    u.content.value.set(bounds.x/l.width,bounds.y/1080,bounds.w/l.width,bounds.h/1080);
+    u.sourceFlip.value=b.dataMode?0:1;
     u.edges.value.set(output.left, output.right);
+    u.blendPower.value=output.blendGamma??1;
     u.correction.value.set(output.brightness, output.gamma, output.black);
     output.mask.forEach((p, i) => u.masks.value[i].set(p.x, p.y));
-    this.texture.needsUpdate = true;
-    this.renderer.clear();
-    if (!blackout) this.renderer.render(this.scene, this.camera);
+    b.renderer.clear(); if (!blackout) b.renderer.render(this.scene, this.camera);
+    // Immediate accelerated canvas copy; no CPU pixel readback or three source uploads.
+    this.context.drawImage(b.renderer.domElement, 0, 0);
   }
-  dispose() { this.texture.dispose(); this.geometry.dispose(); this.material.dispose(); this.renderer.dispose(); }
+  dispose() {
+    this.geometry.dispose(); const b = this.backend;
+    if (--b.users === 0) { b.texture.dispose(); b.material.dispose(); b.renderer.dispose(); backends.delete(this.source); }
+  }
 }

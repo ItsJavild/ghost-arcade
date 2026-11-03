@@ -56,7 +56,7 @@ jobs:
       - name: Stage runtime and notices
         run: |
           New-Item bundle/runtime,bundle/licenses -ItemType Directory -Force | Out-Null
-          Copy-Item "$env:NDI_SDK_DIR\Bin\x64\*.dll" bundle/runtime/
+          Copy-Item "$env:NDI_SDK_DIR\Bin\x64\Processing.NDI.Lib.x64.dll" bundle/runtime/
           $crt = Get-ChildItem 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC' -Recurse -Directory -Filter Microsoft.VC143.CRT | Where-Object FullName -Match '\\x64\\' | Sort-Object FullName -Descending | Select-Object -First 1
           if (-not $crt) { throw 'MSVC x64 app-local runtime files not found' }
           Copy-Item "$($crt.FullName)\*.dll" bundle/runtime/
@@ -83,7 +83,7 @@ jobs:
           if ($process.ExitCode -ne 0) { throw "Packaged smoke test exited $($process.ExitCode)" }
           $report = Get-Content $env:MAPPER_SMOKE_REPORT -Raw | ConvertFrom-Json
           $report | ConvertTo-Json -Depth 5
-          if (-not $report.ndi -or -not $report.preview -or $report.outputs -ne 3) { throw 'Packaged self-test failed' }
+          if (-not $report.ndi -or -not $report.preview -or -not $report.frameTextureTest -or $report.outputs -ne 3) { throw 'Packaged self-test failed' }
           Copy-Item $env:MAPPER_SMOKE_REPORT release/mapper-smoke.json
           Copy-Item ($env:MAPPER_SMOKE_REPORT + '.png') release/mapper-preview.png
           Get-FileHash release/*.zip -Algorithm SHA256 | Format-List | Out-File release/SHA256.txt

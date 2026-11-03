@@ -1,4 +1,4 @@
-Three Projector Mapper 0.1.0 — private test build
+Three Projector Mapper 0.2.0 — private test build
 
 Application and derived Ghost Arcade code: AGPL-3.0-only; see LICENSE.
 Original Ghost Arcade: Copyright 2024–2026 Risk Capital Media LLC.

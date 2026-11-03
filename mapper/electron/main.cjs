@@ -47,15 +47,15 @@ app.whenReady().then(async () => {
       fromMain(event); clearTimeout(timeout);
       let loopback;
       try { loopback = ndi?.selfTest(); } catch (e) { error = e.message; }
-      const report = { ndi: !!ndi, preview: info?.outputs === 3 && info?.width === 5760, outputs: info?.outputs, width: info?.width, loopback, error, platform: process.platform, arch: process.arch };
+      const report = { frameTextureTest: info?.frameTextureTest === true, ndi: !!ndi, preview: info?.outputs === 3 && info?.width === 5760, outputs: info?.outputs, width: info?.width, loopback, error, platform: process.platform, arch: process.arch };
       fs.writeFileSync(process.env.MAPPER_SMOKE_REPORT, JSON.stringify(report, null, 2));
       const screenshot = await main.webContents.capturePage();
       fs.writeFileSync(process.env.MAPPER_SMOKE_REPORT + '.png', screenshot.toPNG());
-      setTimeout(() => app.exit(report.ndi && report.preview && loopback?.received ? 0 : 1), 100);
+      setTimeout(() => app.exit(report.ndi && report.preview && report.frameTextureTest && loopback?.received ? 0 : 1), 100);
       return report;
     });
   }
-  ipcMain.handle('ndi:status', e => { fromMain(e); return { available: !!ndi, error }; });
+  ipcMain.handle('ndi:status', e => { fromMain(e); return { available: !!ndi, error, smoke }; });
   ipcMain.handle('ndi:sources', e => { fromMain(e); return ndi ? ndi.sources() : []; });
   ipcMain.handle('ndi:connect', (e, name) => { fromMain(e); if (!ndi) throw Error(error); if (typeof name !== 'string' || name.length > 2048) throw Error('Invalid source'); ndi.connect(name); lastSequence = 0; });
   ipcMain.handle('ndi:disconnect', e => { fromMain(e); ndi?.disconnect(); lastSequence = 0; });

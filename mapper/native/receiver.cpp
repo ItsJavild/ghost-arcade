@@ -102,6 +102,7 @@ Napi::Value connect(const Napi::CallbackInfo& info) {
   if (!receiver) { Napi::Error::New(js, "Could not create NDI receiver.").ThrowAsJavaScriptException(); return js.Undefined(); }
   running = true;
   worker = std::thread([] {
+    std::vector<uint8_t> nextPixels;
     while (running) {
       NDIlib_video_frame_v2_t frame{};
       if (api->NDIlib_recv_capture_v2(receiver, &frame, nullptr, nullptr, 50) != NDIlib_frame_type_video) continue;
@@ -109,9 +110,10 @@ Napi::Value connect(const Napi::CallbackInfo& info) {
         frame.line_stride_in_bytes >= frame.xres * 4 && (frame.FourCC == NDIlib_FourCC_type_RGBX || frame.FourCC == NDIlib_FourCC_type_RGBA);
       if (valid) {
         try {
-          std::lock_guard<std::mutex> lock(pixelsMutex);
           copyRgba(frame.p_data, frame.xres, frame.yres, frame.line_stride_in_bytes,
-                   frame.FourCC == NDIlib_FourCC_type_RGBA, pixels);
+                   frame.FourCC == NDIlib_FourCC_type_RGBA, nextPixels);
+          std::lock_guard<std::mutex> lock(pixelsMutex);
+          pixels.swap(nextPixels);
           width = frame.xres; height = frame.yres; rateN = frame.frame_rate_N; rateD = frame.frame_rate_D;
           sequence++; arrivedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
         } catch (...) { running = false; }
