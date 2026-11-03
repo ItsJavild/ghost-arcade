@@ -3,6 +3,10 @@ const path = require('node:path');
 const fs = require('node:fs');
 let main, ndi, error = '', lastSequence = 0;
 const smoke = process.argv.includes('--mapper-smoke-test') && !!process.env.MAPPER_SMOKE_REPORT;
+if (smoke) {
+  app.commandLine.appendSwitch('use-angle', 'swiftshader');
+  app.commandLine.appendSwitch('enable-unsafe-swiftshader');
+}
 const outputs = new Map();
 function loadNdi() {
   if (process.platform !== 'win32' || process.arch !== 'x64') { error = 'NDI input requires the Windows x64 desktop build. Test pattern is available here.'; return; }

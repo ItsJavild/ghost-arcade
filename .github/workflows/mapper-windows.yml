@@ -48,6 +48,10 @@ jobs:
         run: |
           New-Item bundle/runtime,bundle/licenses -ItemType Directory -Force | Out-Null
           Copy-Item "$env:NDI_SDK_DIR\Bin\x64\*.dll" bundle/runtime/
+          $crt = Get-ChildItem 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC' -Recurse -Directory -Filter Microsoft.VC143.CRT | Where-Object FullName -Match '\\x64\\' | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $crt) { throw 'MSVC x64 app-local runtime files not found' }
+          Copy-Item "$($crt.FullName)\*.dll" bundle/runtime/
+          Get-FileHash "$env:RUNNER_TEMP\ndi-sdk.exe" -Algorithm SHA256 | Format-List | Out-File bundle/licenses/NDI-SDK-download-SHA256.txt
           $licenses = Get-ChildItem $env:NDI_SDK_DIR -Recurse -File | Where-Object { $_.Name -match 'licen[sc]e|third.?party|copyright' -and $_.Extension -match '\.(txt|pdf|rtf|md|html)$' }
           foreach ($file in $licenses) { Copy-Item $file.FullName (Join-Path 'bundle/licenses' $file.Name) -Force }
           Invoke-WebRequest 'https://downloads.ndi.tv/SDK/NDI_SDK/NDI%20SDK%20License%20Agreement.pdf' -OutFile bundle/licenses/NDI-SDK-License-Agreement.pdf

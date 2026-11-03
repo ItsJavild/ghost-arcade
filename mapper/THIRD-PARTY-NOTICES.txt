@@ -22,3 +22,7 @@ agreement governs; this summary does not replace it.
 Electron, Chromium, Node.js, Three.js and their dependencies retain their own
 licenses and notices. See Electron's LICENSE and LICENSES.chromium.html in
 the application directory and npm dependency license files in the source.
+
+Microsoft Visual C++ runtime redistributable files are included app-locally
+under Microsoft's Visual Studio distribution terms. Copyright Microsoft
+Corporation. Windows 10 or 11 x64 supplies the Universal C Runtime.
