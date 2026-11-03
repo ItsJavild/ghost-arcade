@@ -1,3 +1,4 @@
+import { usablePerspective } from './warp';
 export type Point = { x: number; y: number };
 export type Projector = {
   id: string; name: string; displayId: string; mesh: Point[];
@@ -68,6 +69,7 @@ export function parseRig(text: string): Rig {
     const cols=o?.meshCols??5, rows=o?.meshRows??5;
     if (![2,3,4,5,9,17,33].includes(cols) || ![2,3,4,5,9,17,33].includes(rows) || (o?.warpType!==undefined && !['linear','perspective','bezier'].includes(o.warpType)) || (o?.warpType==='perspective' && (cols!==2 || rows!==2)) || (o?.warpType==='bezier' && (cols!==4 || rows!==4))) throw Error('Invalid warp geometry.');
     if (!o || o.id !== `projector-${i}` || typeof o.name !== 'string' || o.name.length > 80 || typeof o.displayId !== 'string' || !points(o.mesh, cols*rows, -1, 2) || !points(o.mask, 4) || !finite(o.left, 0, .5) || !finite(o.right, 0, .5) || !finite(o.gamma, 1, 4) || !finite(o.brightness, 0, 2) || !finite(o.black, 0, .2) || (o.blendGamma!==undefined && !finite(o.blendGamma,.2,4)) || (o.autoBlend!==undefined && typeof o.autoBlend!=='boolean')) throw Error('Invalid projector calibration.');
+    if(!usablePerspective(o))throw Error('Perspective corners must form a non-collapsed, uncrossed screen boundary.');
     if (o.displayId && used.has(o.displayId)) throw Error('Each projector needs a different display.');
     if (o.displayId) used.add(o.displayId);
   }

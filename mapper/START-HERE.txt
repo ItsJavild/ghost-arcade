@@ -1,0 +1,59 @@
+THREE PROJECTOR MAPPER 0.4.0 - WINDOWS x64
+
+BEFORE LEAVING
+1. Extract the ENTIRE ZIP to a local folder. Do not run inside the ZIP.
+2. Export the rig from your old version, then close the old mapper.
+3. Launch Three Projector Mapper.exe on the operator monitor. Keep runtime DLLs
+   beside it. Review the included NDI terms if prompted.
+4. Test ProPresenter NDI once before travelling. Keep this folder, a copy of the
+   exported rig JSON, and your prior known-working package on the Windows PC.
+
+ONE-HOUR SETUP
+0-10 min: Connect four displays. Windows must Extend (not Duplicate).
+          Confirm all projectors are 1920x1080 and 60Hz. Put the operator window
+          on the control monitor before opening outputs.
+10-20:    Assign Left/Center/Right to different displays. Open all assigned
+          outputs, enable Identify outputs, and verify cable order. Turn Identify
+          OFF. The operator monitor is reserved for controls.
+20-35:    Choose Continuous alignment grid. Solo each projector as needed.
+          Start with Perspective for corners; use Linear or Bezier for curvature.
+          Warp the full region including its overlap. Use Screen mask for spill.
+35-45:    Solo OFF. Set overlaps, align matching grid lines in the physical seams,
+          then choose White and 50% gray to tune blends. Auto edge blends should
+          initially be ON. Avoid applying edge blending in both the projector
+          and this app. Software black cannot remove projector black-floor glow.
+45-55:    Return to live input. Select NDI source and Connect. ProPresenter's
+          aspect should match the stage size shown in Calibration:
+          width = 5760 - left overlap - right overlap; height = 1080.
+          A standard 1920x1080 input in Fit can leave the outer projectors black!
+          Stretch covers the stage but distorts. Fill crops.
+          Check latency on a PHYSICAL output using a running source timer.
+55-60:    Export the rig, verify all three outputs, then Lock calibration.
+
+QUICK RECOVERY
+- No NDI: check ProPresenter output, Refresh sources, select it, Connect again.
+- Too slow: disable Input monitor. This avoids its CPU pixel conversion/copy.
+  Received / presented / source FPS are different measurements. NDI queue/drop
+  counters and Save diagnostics help distinguish receiver and rendering issues.
+- Black output: check Blackout, Solo, calibration pattern, source, assignment,
+  mask and warp. Return to live input clears diagnostic modes and Blackout.
+- Escape closes the focused output; Send to display or Open all reopens it.
+- Cable disconnected: reconnect, Refresh displays, verify assignment and reopen
+  that output. Other outputs remain open. Avoid changing scale/resolution mid-use.
+- Bad calibration edit: Undo; or use the selected projector's partial resets.
+- Recovery: current and previous calibration autosaves are kept in Windows app
+  data. Restore previous autosave is undoable. Load rig imports your exported JSON.
+- Graphics error: Restart preview engine. Reconnect NDI and reopen outputs.
+  Temporary patterns, Solo and Identify are not restored at launch.
+- Setup guide inside the app works offline. Save diagnostics exports settings,
+  performance counters and display details; it includes no captured video frames.
+
+WHAT HAS AND HAS NOT BEEN VERIFIED
+The bundled Windows build checks native NDI reception, GPU orientation in three
+warp modes, masks, complementary edge blends, diagnostic patterns, blackout, and
+video delivery through three separate 1920x1080 output windows. Autosave recovery
+has automated tests. These are software tests, not a guarantee for a particular
+HDMI adapter, projector, driver or room. Sustained 60fps, HDMI routing/hotplug,
+photometric seam quality and end-to-end latency require your actual hardware.
+The small input monitor runs at up to 30fps. Physical outputs share upstream
+reception/rendering and use canvas-stream video presentation, which can buffer.

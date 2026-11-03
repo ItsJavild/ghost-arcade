@@ -1,4 +1,4 @@
-# Three Projector Mapper 0.3.0
+# Three Projector Mapper 0.4.0
 
 Windows x64 projection mapper derived from Ghost Arcade. One local ProPresenter
 NDI input, one continuous stage, three independently calibrated 1920×1080
@@ -15,6 +15,41 @@ Choose the ProPresenter NDI source and Connect. Destinations can stay Preview
 only without any physical projectors. The operator monitor is reserved for
 controls. Escape closes an output window. Export your existing rig before
 switching versions; 0.1.0 rigs import into 0.2.0 without discarding calibration.
+
+## Setup safeguards (0.4.0)
+
+Open **Setup guide** for an offline one-hour checklist. `START-HERE.txt` is also
+included beside the executable. Connect all displays before launch and put the
+operator window on the control monitor before routing outputs. The operator
+monitor is pinned while physical outputs are active. The app prevents display
+sleep, blocks accidental reload/zoom shortcuts and prompts before closing active
+outputs. A second launch focuses the existing mapper instead of competing for NDI.
+
+**Open all assigned outputs** routes assigned displays and opens placeholders for
+unassigned outputs. **Identify outputs** shows raster labels (bypasses geometry)
+to check cable order. Disable it before calibration. **Solo selected projector**
+blacks the other two outputs. Temporary modes are visibly indicated and reset on
+launch; **Return to live input** clears patterns, identification, Solo and Blackout.
+
+Calibration patterns override input without disconnecting NDI. Continuous grid,
+white, 50% gray, black and bars still use the selected warp, mask and fades. Black
+omits software black lift so it reveals projector black floor. Use white/gray with
+Solo OFF to check seams. Output status reports decoded video dimensions and frame
+counts from each separate output window; it cannot measure HDMI scanout.
+
+Disk autosave writes `calibration.json` in Electron's per-user application-data
+folder and retains `calibration.previous.json`. Writes use same-volume rename;
+invalid JSON cannot replace the last saved state. Browser storage remains a
+fallback. **Restore previous autosave** is undoable. Export rig JSON at milestones;
+a previous-state backup is not a long-term version history. A display disconnect
+closes only its routed output. Reconnect, refresh displays and reopen it; HDMI
+routing changes on the actual RTX 2060 remain a hardware test.
+
+Disable **Input monitor** to skip its CPU image conversion/copy while outputs keep
+rendering. NDI SDK connection, queue and dropped-frame counters appear below the
+input metrics. **Save diagnostics** exports those counters, configuration and
+display details with no captured video. A render exception clears output canvases
+to black and offers **Restart preview engine**; reconnect/reopen afterward.
 
 ## Layout and blending
 

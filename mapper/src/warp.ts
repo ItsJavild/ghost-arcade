@@ -36,3 +36,11 @@ export function changeWarp(o: Projector, type: WarpType, cols?: number, rows?: n
 export function blendBoundary(o: Projector, u: number) {
   return Array.from({length:33},(_,i)=>sampleWarp(o,u,i/32));
 }
+
+// A crossed or collapsed corner pin has a singular projective transform.
+export function usablePerspective(o: Projector): boolean {
+  if(o.warpType!=='perspective')return true;
+  const [a,b,d,c]=o.mesh, polygon=[a,b,c,d];
+  const turns=polygon.map((p,i)=>{const q=polygon[(i+1)%4],r=polygon[(i+2)%4];return (q.x-p.x)*(r.y-q.y)-(q.y-p.y)*(r.x-q.x);});
+  return turns.every(n=>Number.isFinite(n)&&n>1e-6)||turns.every(n=>Number.isFinite(n)&&n< -1e-6);
+}

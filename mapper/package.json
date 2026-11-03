@@ -1,6 +1,6 @@
 {
   "name": "three-projector-mapper",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "license": "AGPL-3.0-only",
   "type": "module",
@@ -9,7 +9,7 @@
     "dev": "vite --host 127.0.0.1 --port 1430 --strictPort",
     "desktop": "npm run build && electron .",
     "build": "tsc --noEmit && vite build",
-    "test": "vitest run",
+    "test": "vitest run && node --test electron/rig-store.check.cjs",
     "native:build": "cmake-js compile --directory native --arch x64",
     "package:win": "npm run build && node scripts/check-native.cjs && electron-builder --win --x64 --publish never"
   },
@@ -55,6 +55,10 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "START-HERE.txt",
+        "to": "START-HERE.txt"
       }
     ],
     "win": {

@@ -135,6 +135,21 @@ Napi::Value frame(const Napi::CallbackInfo& info) {
   result.Set("data", Napi::Buffer<uint8_t>::Copy(js, pixels.data(), pixels.size()));
   return result;
 }
+// Low-frequency diagnostics; SDK counters distinguish receiver drops from UI skips.
+Napi::Value statistics(const Napi::CallbackInfo& info) {
+  auto js=info.Env();auto out=Napi::Object::New(js);
+  out.Set("running",running.load());
+  if(receiver){
+    NDIlib_recv_performance_t total{},dropped{};NDIlib_recv_queue_t queue{};
+    api->NDIlib_recv_get_performance(receiver,&total,&dropped);
+    api->NDIlib_recv_get_queue(receiver,&queue);
+    out.Set("received",static_cast<double>(total.video_frames));
+    out.Set("dropped",static_cast<double>(dropped.video_frames));
+    out.Set("queued",queue.video_frames);
+    out.Set("connections",api->NDIlib_recv_get_no_connections(receiver));
+  }
+  return out;
+}
 // Packaged-build diagnostic: exercises the real SDK sender/receiver locally.
 // This is not an operator-facing NDI send feature.
 Napi::Value selfTest(const Napi::CallbackInfo& info) {
@@ -183,6 +198,7 @@ Napi::Object init(Napi::Env js, Napi::Object out) {
   out.Set("connect", Napi::Function::New(js, connect));
   out.Set("disconnect", Napi::Function::New(js, [](const Napi::CallbackInfo& info) { stop(); return info.Env().Undefined(); }));
   out.Set("frame", Napi::Function::New(js, frame));
+  out.Set("statistics",Napi::Function::New(js,statistics));
   out.Set("selfTest", Napi::Function::New(js, selfTest)); return out;
 }
 }

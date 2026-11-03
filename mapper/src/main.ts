@@ -1,17 +1,20 @@
 import './style.css';
 import { defaultRig, automaticEdges, layout, parseRig, setOverlap, resetCalibration, overlapFromSeam, type ResetPart, type Rig } from './rig';
-import { ProjectorRenderer } from './renderer';
-import { dimensions, sampleWarp, changeWarp, blendBoundary, type WarpType } from './warp';
+import { ProjectorRenderer, type CalibrationPattern } from './renderer';
+import { dimensions, sampleWarp, changeWarp, blendBoundary, usablePerspective, type WarpType } from './warp';
 import { drawTestPattern } from './testPatterns';
 
-type Display = { id: string; name: string; width: number; height: number; operator: boolean };
+type Display = { id: string; name: string; width: number; height: number; operator: boolean; refreshRate?:number };
 type Frame = { width: number; height: number; sequence: number; fps: number; ageMs: number; data: Uint8Array };
 type Bridge = {
+  readRig?():Promise<{current:string|null;previous:string|null}>; saveRig?(text:string):Promise<boolean>;
+  outputStatus?():Promise<{id:string;displayId:string;fullscreen:boolean}[]>;
   status(): Promise<{ available: boolean; error: string; smoke?: boolean }>;
+  statistics?():Promise<{running:boolean;received?:number;dropped?:number;queued?:number;connections?:number}|null>;
   sources(): Promise<string[]>; connect(name: string): Promise<void>; disconnect(): Promise<void>;
   frame(): Promise<Frame | null>; displays(): Promise<Display[]>;
   openOutput(id: string, displayId: string): Promise<void>; closeOutputs(): Promise<void>;
-  ready?(info: { outputs: number; width: number; frameTextureTest: boolean }): Promise<unknown>;
+  ready?(info: { outputs: number; width: number; frameTextureTest: boolean; outputStreams?:boolean; calibrationTests?:boolean }): Promise<unknown>;
 };
 declare global { interface Window { mapper?: Bridge; mapperStreams?: Record<string, MediaStream> } }
 const root = document.querySelector<HTMLDivElement>('#app')!;
@@ -22,12 +25,27 @@ if (outputId && /^projector-[0-2]$/.test(outputId)) {
   document.body.className = 'output-window';
   root.innerHTML = '<video autoplay muted playsinline></video><span class="waiting">Waiting for operator preview stream… · Escape closes output</span>';
   const video = root.querySelector('video')!;
+  let presentedFrames=0;
+  const onFrame=()=>{presentedFrames++;video.requestVideoFrameCallback(onFrame);};
+  video.requestVideoFrameCallback(onFrame);
+  const report=setInterval(()=>{
+    if(!window.opener||window.opener.closed){clearInterval(report);window.close();return;}
+    let pixel:number[]|undefined;
+    if(new URLSearchParams(location.search).has('probe')&&video.readyState>=2){
+      const sample=document.createElement('canvas');sample.width=sample.height=1;
+      const ctx=sample.getContext('2d')!;ctx.drawImage(video,960,540,1,1,0,0,1,1);pixel=Array.from(ctx.getImageData(0,0,1,1).data);
+    }
+    window.opener.postMessage({type:'mapper-output',id:outputId,width:video.videoWidth,height:video.videoHeight,frames:presentedFrames,ready:video.readyState>=2,pixel},'*');
+  },1000);
   const wait = setInterval(() => {
     try {
       const stream = window.opener?.mapperStreams?.[outputId];
-      if (stream) { video.srcObject = stream; void video.play(); root.querySelector('.waiting')?.remove(); clearInterval(wait); }
-      else if (!window.opener || window.opener.closed) { clearInterval(wait); window.close(); }
-    } catch { root.querySelector('.waiting')!.textContent = 'Output link unavailable. Reopen this preview from the operator window.'; clearInterval(wait); }
+      if (stream) {
+        video.srcObject=stream;
+        void video.play().then(()=>root.querySelector('.waiting')?.remove()).catch(()=>{const message=root.querySelector('.waiting');if(message)message.textContent='Playback failed. Close and reopen this output.';});
+        clearInterval(wait);
+      } else if (!window.opener || window.opener.closed) { clearInterval(wait); window.close(); }
+    } catch { const message=root.querySelector('.waiting');if(message)message.textContent='Output link unavailable. Reopen from the operator window.';clearInterval(wait); }
   }, 100);
   addEventListener('keydown', e => { if (e.key === 'Escape') window.close(); });
 } else {
@@ -40,26 +58,36 @@ async function start() {
   let displays: Display[] = [], sources: string[] = [], lastFrameAt = 0, sequence = 0, nominalFps = 0, measuredFps = 0;
   let sampleSequence = 0, sampleTime = performance.now(), receiveError = '', nativeAvailable = false;
   let busy = false, connectionGeneration = 0, tickCount = 0, patternCount = 0, renderFailed = false;
+  let ndiStatistics:Awaited<ReturnType<NonNullable<Bridge['statistics']>>>=null;
   let latestFrame:Frame|null=null, uploadedSequence=-1, smokeMode=false;
   let activePoint=0, sourceRevision=0, contentKey='', outputKey='', lastPreviewAt=0, presented=0, presentedFps=0, presentedSample=0, presentedAt=performance.now(), lastPresentedSequence=0, lastRenderMs=0;
+  let calibrationPattern:CalibrationPattern='none',solo=false,identify=false,monitor=true,monitorSequence=-1;
+  let recoveryCopy:string|null=null, recovered=false, smokeStarted=false;
+  const outputReports=new Map<string,{width:number;height:number;frames:number;ready:boolean;pixel?:number[];at:number}>();
   const undo: string[] = [], redo: string[] = [], children = new Map<string, Window>();
   try { const saved = localStorage.getItem('mapper-rig-v1'); if (saved) rig = parseRig(saved); } catch { /* default rig if old/corrupt */ }
+  try {
+    const saved=await window.mapper?.readRig?.();
+    recoveryCopy=saved?.previous??null;
+    if(saved?.current){try{rig=parseRig(saved.current);}catch{if(recoveryCopy){rig=parseRig(recoveryCopy);recovered=true;}}}
+  } catch { /* local autosave remains available if desktop storage cannot be read */ }
   root.innerHTML = `
-    <header><div class="brand"><span class="mark">◩</span><div><h1>Three Projector Mapper <small>PROTOTYPE 0.3 · WINDOWS x64</small></h1><p>One source. Three calibrated outputs.</p></div></div><div class="actions"><button id="undo">Undo</button><button id="redo">Redo</button><button id="load">Load rig</button><button id="save">Save rig</button><button id="blackout" class="danger">Blackout outputs</button></div></header>
+    <header><div class="brand"><span class="mark">◩</span><div><h1>Three Projector Mapper <small>PROTOTYPE 0.4 · WINDOWS x64</small></h1><p>One source. Three calibrated outputs.</p></div></div><div class="actions"><button id="setup-help">Setup guide</button><button id="undo">Undo</button><button id="redo">Redo</button><button id="load">Load rig</button><button id="save">Save rig</button><button id="blackout" class="danger">Blackout outputs</button></div></header>
     <div id="notice" role="status" aria-live="polite">Starting previews…</div>
     <main>
       <section class="panel input"><div class="section-head"><h2><span class="step">01</span> Input</h2><span id="input-state" class="badge">TEST SOURCE</span></div>
         <div class="source-controls"><label>Source<select id="source-mode"><option value="pattern">Animated test pattern</option><option value="ndi">NDI® from ProPresenter</option></select></label><label class="grow">NDI source<select id="ndi-source"><option value="">Select a discovered source</option></select></label><button id="refresh">Refresh sources</button><button id="connect">Connect</button><button id="disconnect">Disconnect</button></div>
-        <p id="runtime" class="muted"></p>
+        <p id="runtime" class="muted"></p><label class="inline-check"><input id="monitor-enabled" type="checkbox" checked>Input monitor · disable to reduce CPU work</label>
         <div class="input-preview"><canvas id="input-preview"></canvas><span id="source-label">TEST SOURCE · NOT NDI</span></div>
         <div class="metrics"><div><span>RECEIVED</span><strong id="count">—</strong></div><div><span>INPUT SIZE</span><strong id="resolution">—</strong></div><div><span>RECEIVED / PRESENTED / SOURCE FPS</span><strong id="fps">—</strong></div><div><span>APP FRAME AGE · NOT END-TO-END</span><strong id="age">—</strong></div></div>
-        <p class="muted attribution"><a href="https://ndi.video/" target="_blank" rel="noreferrer">NDI®</a> is a registered trademark of Vizrt NDI AB.</p>
+        <p id="ndi-statistics" class="muted"></p><p class="muted attribution"><a href="https://ndi.video/" target="_blank" rel="noreferrer">NDI®</a> is a registered trademark of Vizrt NDI AB.</p>
       </section>
       <section class="panel calibration"><div class="section-head"><h2><span class="step">02</span> Calibration</h2><strong id="canvas-size"></strong></div>
-        <div class="canvas-controls"><label>Left / center overlap (px)<input id="overlap" type="number" min="0" max="768" step="1"></label><label class="overlap-drag">Drag overlap<input id="overlap-slider" type="range" min="0" max="768" step="1"></label><label><input id="link-overlaps" type="checkbox" checked>Link both seams</label><label>Center / right overlap (px)<input id="right-overlap" type="number" min="0" max="768" step="1"></label><label class="overlap-drag">Drag right overlap<input id="right-overlap-slider" type="range" min="0" max="768" step="1"></label><button id="reset-overlap">Reset overlaps</button><label>Input scaling<select id="fit"><option value="contain">Fit — preserve entire input</option><option value="cover">Fill — crop to canvas</option><option value="stretch">Stretch to canvas</option></select></label><button id="refresh-displays">Refresh displays</button><button id="close-outputs">Close output windows</button></div>
+        <div class="setup-tools"><button id="open-all">Open all assigned outputs</button><label>Calibration pattern<select id="calibration-pattern"><option value="none">Live input / source</option><option value="grid">Continuous alignment grid</option><option value="white">White · blend seams</option><option value="gray">50% gray · fine blend</option><option value="black">Black · projector black floor</option><option value="bars">Color bars</option></select></label><label class="inline-check"><input id="solo" type="checkbox">Solo selected projector</label><label class="inline-check"><input id="identify" type="checkbox">Identify outputs · raster labels</label><button id="live-output">Return to live input</button></div>
+        <p id="output-summary" class="muted"></p><p id="aspect-warning" class="warning" hidden></p><div class="canvas-controls"><label>Left / center overlap (px)<input id="overlap" type="number" min="0" max="768" step="1"></label><label class="overlap-drag">Drag overlap<input id="overlap-slider" type="range" min="0" max="768" step="1"></label><label><input id="link-overlaps" type="checkbox" checked>Link both seams</label><label>Center / right overlap (px)<input id="right-overlap" type="number" min="0" max="768" step="1"></label><label class="overlap-drag">Drag right overlap<input id="right-overlap-slider" type="range" min="0" max="768" step="1"></label><button id="reset-overlap">Reset overlaps</button><label>Input scaling<select id="fit"><option value="contain">Fit — preserve entire input</option><option value="cover">Fill — crop to canvas</option><option value="stretch">Stretch to canvas</option></select></label><button id="refresh-displays">Refresh displays</button><button id="close-outputs">Close output windows</button></div>
         <div id="overview" aria-label="Three-projector source crop overview"></div><p class="muted">The overview fits your window. Output resolution stays 1920 × 1080. Drag either seam handle or the overlap slider. Link both seams or adjust them independently; hatched areas contain duplicated source pixels and automatic fades.</p>
       <div class="section-head projector-toolbar"><label>Selected projector<select id="projector-select">${rig.outputs.map((o,i)=>`<option value="${i}">${escape(o.name)}</option>`).join('')}</select></label><div class="actions"><button id="open-warp">Open warp adjustment…</button><button id="mesh-mode" class="active">Mesh warp</button><button id="mask-mode">Screen mask</button><button id="lock">Lock calibration</button></div></div>
-        <div class="projectors">${rig.outputs.map((o, i) => `<article class="panel projector" data-index="${i}"><div class="section-head"><h3>${escape(o.name)}</h3><span class="badge">1920 × 1080</span></div><div class="projector-preview"><canvas id="projector-${i}"></canvas><svg id="handles-${i}" viewBox="0 0 1920 1080" aria-label="${escape(o.name)} calibration handles"></svg></div><label>Output destination<select id="display-${i}"></select></label><div class="actions"><button id="preview-${i}">Open preview</button><button id="send-${i}">Send to display</button></div><div class="resets">${(["mesh","mask","blend","all"] as const).map(part=>`<button data-reset="${part}" data-output="${i}">Reset ${part==='blend'?'blend/color':part}</button>`).join('')}</div></article>`).join('')}</div>
+        <div class="projectors">${rig.outputs.map((o, i) => `<article class="panel projector" data-index="${i}"><div class="section-head"><h3>${escape(o.name)}</h3><span class="badge">1920 × 1080</span></div><div class="projector-preview"><canvas id="projector-${i}"></canvas><svg id="handles-${i}" viewBox="0 0 1920 1080" tabindex="0" aria-label="${escape(o.name)} calibration handles"></svg></div><label>Output destination<select id="display-${i}"></select></label><div class="actions"><button id="preview-${i}">Open preview</button><button id="send-${i}">Send to display</button></div><p id="output-state-${i}" class="muted">Output closed</p><div class="resets">${(["mesh","mask","blend","all"] as const).map(part=>`<button data-reset="${part}" data-output="${i}">Reset ${part==='blend'?'blend/color':part}</button>`).join('')}</div></article>`).join('')}</div>
         <dialog id="warp-dialog" aria-labelledby="warp-title"><div class="panel warp-panel"><div class="section-head"><h3 id="warp-title">Warp adjustment</h3><button id="close-warp">Done</button></div><div class="section-head"><div class="actions"><label>Zoom<select id="warp-zoom"><option value="1">Fit route + margin</option><option value="1.5">150%</option><option value="2">200%</option><option value="0.5">50%</option></select></label><label><input id="show-blends" type="checkbox" checked>Show blend zones</label></div></div>
           <div class="warp-controls"><label>Warp type<select id="warp-type"><option value="perspective">Perspective · corner pin</option><option value="linear">Linear · mesh</option><option value="bezier">Bézier · curved surface</option></select></label><label>Horizontal mesh splits<select id="mesh-cols">${[1,2,4,8,16,32].map(n=>`<option value="${n+1}">${n}</option>`).join('')}</select></label><label>Vertical mesh splits<select id="mesh-rows">${[1,2,4,8,16,32].map(n=>`<option value="${n+1}">${n}</option>`).join('')}</select></label><label>Selected X · center origin<input id="point-x" type="number" step="1"></label><label>Selected Y · up<input id="point-y" type="number" step="1"></label></div>
           <div class="warp-workspace"><canvas id="warp-preview"></canvas><svg id="warp-editor" tabindex="0" role="application" aria-label="Selected projector warp editor" viewBox="-192 -108 2304 1296"></svg></div>
@@ -69,16 +97,41 @@ async function start() {
           <label>Left blend (%)<input id="blend-left" type="number" min="0" max="50" step="0.1"></label><label>Right blend (%)<input id="blend-right" type="number" min="0" max="50" step="0.1"></label><label>Display gamma<input id="gamma" type="number" min="1" max="4" step="0.1"></label><label>Brightness<input id="brightness" type="number" min="0" max="2" step="0.05"></label><label><input id="auto-blend" type="checkbox">Auto edge blends</label><label>Blend gamma<input id="blend-gamma" type="number" min="0.2" max="4" step="0.1"></label><label>Black-level lift<input id="black" type="number" min="0" max="0.2" step="0.005"></label>
         </div></div>
       </section>
-    </main><footer>GPU mesh / mask / blend previews · Receiver runs independently of physical outputs · Escape exits fullscreen output</footer><input id="file" type="file" accept=".json,application/json" hidden>`;
+      <p id="autosave" class="muted">Calibration autosave ready</p><div class="actions"><button id="recover-rig">Restore previous autosave</button><button id="diagnostics">Save diagnostics</button><button id="restart-render">Restart preview engine</button></div>
+    </main><dialog id="help-dialog" aria-labelledby="help-title"><div class="panel"><div class="section-head"><h2 id="help-title">One-hour projector setup</h2><button id="close-help">Done</button></div>
+    <ol class="setup-guide"><li><b>0–10 min · Displays.</b> Connect all four displays before launch. Windows must use Extend, with each projector at 1920 × 1080, 60 Hz. Put this operator window on your control monitor before opening outputs. Avoid changing Windows scale/resolution during setup.</li>
+    <li><b>10–20 min · Route and identify.</b> Assign Left, Center and Right to different displays. Open all assigned outputs; enable Identify outputs to check the cables. Disable Identify afterward. Use Solo to adjust one projector without light from the others.</li>
+    <li><b>20–35 min · Geometry.</b> Choose the alignment grid. Start with Perspective for corners, then Linear mesh or Bézier for curvature. Warp the full region, including overlap. Use Screen mask to clip spill. A software mask cannot remove a projector’s black-floor glow.</li>
+    <li><b>35–45 min · Seams.</b> Set physical overlap in source pixels; stage width is 5760 minus both overlaps. Align matching grid lines in both seams. Use White, then 50% gray, with Solo OFF and Identify OFF. Keep Auto edge blends on initially; tune blend gamma and projector brightness if needed. Disable any projector’s internal blending to avoid double fades.</li>
+    <li><b>45–55 min · Live source.</b> Return to live input, choose NDI and Connect. ProPresenter’s output aspect should match the displayed stage size. A 1920 × 1080 input using Fit occupies only the center of a very wide stage; use a matching wide ProPresenter output. Stretch is available if distortion is intentional. Compare a source timer against the physical output for latency. Disable the input monitor if CPU load is high.</li>
+    <li><b>55–60 min · Save and lock.</b> Export the rig, verify all three outputs are playing, and lock calibration. Keep the exported JSON on the Windows PC. Do not open two mapper versions at once. Escape closes a focused output; reopen it from Calibration.</li></ol>
+    <p class="muted">No source? Refresh sources, confirm ProPresenter NDI output is enabled, then Connect again. Calibration patterns work without NDI. A cable disconnect closes only its affected output; reconnect, Refresh displays, check its destination and reopen. Signal loss blacks live output after 2 seconds and recovers when frames resume. Blackout overrides patterns and identification.</p></div></dialog><footer>GPU mesh / mask / blend previews · Receiver runs independently of physical outputs · Escape exits fullscreen output</footer><input id="file" type="file" accept=".json,application/json" hidden>`;
   const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
   const value = (id: string) => $<HTMLInputElement>(id).value;
   const notify = (message: string, bad = false) => { $('notice').textContent = message; $('notice').classList.toggle('error', bad); };
   const remember = () => { undo.push(JSON.stringify(rig)); if (undo.length > 100) undo.shift(); redo.length = 0; };
-  const saveLocal = () => { try { localStorage.setItem('mapper-rig-v1', JSON.stringify(rig)); } catch { notify('Rig autosave unavailable. Use Save rig to export a file.', true); } };
+  const saveLocal = () => {
+    const text=JSON.stringify(rig);
+    try { localStorage.setItem('mapper-rig-v1',text); } catch { notify('Browser autosave unavailable. Export your rig.',true); }
+    if(window.mapper?.saveRig)void window.mapper.saveRig(text).then(()=>{$('autosave').textContent=`Saved on this PC · ${new Date().toLocaleTimeString()}`;}).catch(e=>{$('autosave').textContent=`Disk autosave failed: ${String(e)}. Export your rig now.`;});
+    else $('autosave').textContent='Saved in this browser · export your rig for transfer';
+  };
   const warpDialog = $<HTMLDialogElement>('warp-dialog');
   $('open-warp').onclick = () => { warpDialog.showModal(); outputKey=''; refreshControls(); };
   $('close-warp').onclick = () => warpDialog.close();
   $('projector-select').onchange = () => { selected=Number(value('projector-select'));activePoint=0;refreshControls(); };
+  $('setup-help').onclick=()=>$<HTMLDialogElement>('help-dialog').showModal();
+  $('close-help').onclick=()=>$<HTMLDialogElement>('help-dialog').close();
+  $('recover-rig').onclick=async()=>{
+    try{const saved=await window.mapper?.readRig?.();const text=saved?.previous??recoveryCopy;if(!text){notify('No previous disk autosave is available. Load an exported rig instead.',true);return;}const next=parseRig(text);remember();const before=rig;rig=next;closeChangedAssignments(before);saveLocal();refreshControls();await updateDisplays();notify('Previous autosave restored. Undo returns to the state before recovery.');}
+    catch(e){notify(`Could not restore calibration: ${String(e)}`,true);}
+  };
+  $('restart-render').onclick=()=>location.reload();
+  $('monitor-enabled').onchange=()=>{monitor=$<HTMLInputElement>('monitor-enabled').checked;lastPreviewAt=0;monitorSequence=-1;};
+  $('calibration-pattern').onchange=()=>{calibrationPattern=value('calibration-pattern') as CalibrationPattern;};
+  $('solo').onchange=()=>{solo=$<HTMLInputElement>('solo').checked;};
+  $('identify').onchange=()=>{identify=$<HTMLInputElement>('identify').checked;};
+  $('live-output').onclick=()=>{calibrationPattern='none';solo=false;identify=false;blackout=false;$<HTMLSelectElement>('calibration-pattern').value='none';for(const id of ['solo','identify'])$<HTMLInputElement>(id).checked=false;$('blackout').textContent='Blackout outputs';$('blackout').classList.remove('blackout-on');notify('Calibration patterns and isolation cleared. Selected input is sent to all outputs.');};
   const raw = $<HTMLCanvasElement>('input-preview'), rawCtx = raw.getContext('2d')!;
   const shared = document.createElement('canvas'), sharedCtx = shared.getContext('2d')!;
   const rawFrame = document.createElement('canvas'), rawFrameCtx = rawFrame.getContext('2d')!;
@@ -90,6 +143,10 @@ async function start() {
   window.mapperStreams = {};
   for (let i = 0; i < 3; i++) window.mapperStreams[rig.outputs[i].id] = $<HTMLCanvasElement>(`projector-${i}`).captureStream(60);
 
+  addEventListener('message',event=>{
+    const d=event.data;if(d?.type!=='mapper-output'||!children.has(d.id)||event.source!==children.get(d.id))return;
+    outputReports.set(d.id,{...d,at:performance.now()});
+  });
   function pointControls() {
     const o=rig.outputs[selected], list=editMode==='mesh'?o.mesh:o.mask;
     activePoint=Math.max(0,Math.min(list.length-1,activePoint));
@@ -123,7 +180,7 @@ async function start() {
   function refreshControls() {
     const o = rig.outputs[selected];
     $<HTMLSelectElement>('projector-select').value=String(selected);
-    $('warp-title').textContent=`${o.name} · ${editMode==='mesh'?'Warp adjustment':'Screen mask'}`;
+    $('warp-title').textContent=`${o.name} · ${editMode==='mesh'?'Warp adjustment':'Screen mask'}${solo?' · SOLO':''}${calibrationPattern!=='none'?' · '+calibrationPattern.toUpperCase():''}`;
     document.querySelectorAll<HTMLElement>('.projector').forEach((card,i)=>{card.hidden=i!==selected;});
     $('selected-title').textContent = `${o.name} · ${editMode === 'mesh' ? `${o.warpType??'linear'} warp` : 'four-point projector mask'}`;
     $('edit-help').textContent = locked ? 'Calibration is locked.' : editMode === 'mesh' ? 'Select a point to edit its coordinates, or drag points and edges in Warp adjustment. Blend zones move with the warp.' : 'Drag the four mask points to clip light to the screen boundary. Mask coordinates are independent of the mesh.';
@@ -144,6 +201,7 @@ async function start() {
     $('lock').textContent = locked ? 'Unlock calibration' : 'Lock calibration';
     for (const id of ['blend-left', 'blend-right', 'gamma', 'brightness', 'black', 'overlap', 'overlap-slider', 'reset-overlap', 'link-overlaps', 'fit', 'reset', 'warp-type', 'point-x', 'point-y', 'auto-blend', 'blend-gamma']) ($<HTMLInputElement>(id)).disabled = locked;
     for (let i = 0; i < 3; i++) $<HTMLSelectElement>(`display-${i}`).disabled = locked;
+    for(const id of ['undo','redo','load','recover-rig'])$<HTMLButtonElement>(id).disabled=locked;
     document.querySelectorAll<HTMLButtonElement>('[data-reset]').forEach(b=>b.disabled=locked);
     handles(); overview();
   }
@@ -158,15 +216,23 @@ async function start() {
     catch (e) { notify(String(e), true); }
     rig.outputs.forEach((o, i) => {
       const select = $<HTMLSelectElement>(`display-${i}`);
-      select.innerHTML = '<option value="">Preview only — no projector needed</option>' + displays.filter(d => !d.operator).map(d => `<option value="${escape(d.id)}">${escape(d.name)} · ${d.width} × ${d.height}</option>`).join('');
+      if (document.activeElement===select)return;
+      select.innerHTML = '<option value="">Preview only — no projector needed</option>' + displays.filter(d => !d.operator).map(d => `<option value="${escape(d.id)}">${escape(d.name)} · ${d.width} × ${d.height}${d.refreshRate?` · ${Math.round(d.refreshRate)} Hz`:''}</option>`).join('');
       if (o.displayId && !displays.some(d => d.id === o.displayId && !d.operator)) select.insertAdjacentHTML('beforeend', `<option value="${escape(o.displayId)}">Saved display disconnected · preview only</option>`);
       select.value = o.displayId;
+    });
+    const states=await window.mapper?.outputStatus?.()??[];
+    rig.outputs.forEach((o,i)=>{
+      const child=children.get(o.id),report=outputReports.get(o.id),state=states.find(s=>s.id===o.id);
+      const open=state||child&&!child.closed;
+      $(`output-state-${i}`).textContent=!open?'Output closed':report&&performance.now()-report.at<4000&&report.ready?`${state?.fullscreen?'Fullscreen':'Preview'} · video ${report.width} × ${report.height} · ${report.frames} presented frames`:'Output open · waiting for video heartbeat';
     });
   }
   async function updateSources() {
     try {
       sources = window.mapper ? await window.mapper.sources() : [];
       const select = $<HTMLSelectElement>('ndi-source'), before = select.value || rig.source;
+      if(document.activeElement===select)return;
       select.innerHTML = '<option value="">Select a discovered source</option>' + sources.map(name => `<option value="${escape(name)}">${escape(name)}</option>`).join('');
       if (sources.includes(before)) select.value = before;
     } catch (e) { notify(`Discovery failed: ${String(e)}`, true); }
@@ -174,7 +240,7 @@ async function start() {
   function openPreview(i: number) {
     const id = rig.outputs[i].id, previous = children.get(id);
     if (previous && !previous.closed) { previous.focus(); return previous; }
-    const url = new URL(location.href); url.search = `?output=${id}`;
+    const url = new URL(location.href); url.search = `?output=${id}${smokeMode?'&probe=1':''}`;
     const child = window.open(url, id, 'popup,width=960,height=580');
     if (!child) notify('Preview window blocked. Allow popups for this app.', true);
     else children.set(id, child);
@@ -198,13 +264,21 @@ async function start() {
     svg.addEventListener('pointermove',e=>{
       if(!drag)return;
       const o=rig.outputs[selected], list=editMode==='mesh'?o.mesh:o.mask, p=position(e), dim=dimensions(o), factor=e.shiftKey ? .1 : 1;
+      const previous=structuredClone(list);
       let dx=(p.x-drag.start.x)*factor,dy=(p.y-drag.start.y)*factor;
       const snap=(v:number)=>{if(e.ctrlKey)return v;for(const guide of [0,.25,.5,.75,1])if(Math.abs(v-guide)<.004)return guide;return v;};
+      if(drag.move){
+        // One translation for the whole region; independent point snapping/clamping
+        // would distort a calibrated mesh during Alt-drag.
+        const min=editMode==='mesh'?-1:0,max=editMode==='mesh'?2:1,anchor=drag.points[activePoint];
+        dx=Math.max(min-Math.min(...drag.points.map(p=>p.x)),Math.min(max-Math.max(...drag.points.map(p=>p.x)),snap(anchor.x+dx)-anchor.x));
+        dy=Math.max(min-Math.min(...drag.points.map(p=>p.y)),Math.min(max-Math.max(...drag.points.map(p=>p.y)),snap(anchor.y+dy)-anchor.y));
+      }
       list.forEach((point,n)=>{
         const x=n%dim.cols,y=Math.floor(n/dim.cols);
         const onEdge=editMode==='mesh'&&((drag!.edge===0&&y===0)||(drag!.edge===1&&x===dim.cols-1)||(drag!.edge===2&&y===dim.rows-1)||(drag!.edge===3&&x===0));
-        if(drag!.move||drag!.point===n||onEdge){point.x=Math.max(editMode==='mesh'?-1:0,Math.min(editMode==='mesh'?2:1,snap(drag!.points[n].x+dx)));point.y=Math.max(editMode==='mesh'?-1:0,Math.min(editMode==='mesh'?2:1,snap(drag!.points[n].y+dy)));}
-      });handles();
+        if(drag!.move||drag!.point===n||onEdge){point.x=Math.max(editMode==='mesh'?-1:0,Math.min(editMode==='mesh'?2:1,drag!.move?drag!.points[n].x+dx:snap(drag!.points[n].x+dx)));point.y=Math.max(editMode==='mesh'?-1:0,Math.min(editMode==='mesh'?2:1,drag!.move?drag!.points[n].y+dy:snap(drag!.points[n].y+dy)));}
+      });if(editMode==='mesh'&&!usablePerspective(o)){o.mesh=previous;notify('Corner pin cannot cross or collapse. Keep the four corners around the screen boundary.',true);}handles();
     });
     const finish=()=>{if(drag){drag=null;saveLocal();}};
     svg.addEventListener('pointerup',finish);svg.addEventListener('pointercancel',finish);svg.addEventListener('lostpointercapture',finish);
@@ -213,14 +287,22 @@ async function start() {
       const navigation:Record<string,number>={w:-cols,a:-1,s:cols,d:1};
       if(e.key.toLowerCase() in navigation){activePoint=Math.max(0,Math.min(list.length-1,activePoint+navigation[e.key.toLowerCase()]));handles();e.preventDefault();return;}
       const nudge:Record<string,[number,number]>={ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1]};
-      if(nudge[e.key]){remember();const [dx,dy]=nudge[e.key],step=e.shiftKey?10:1,point=list[activePoint],min=editMode==='mesh'?-1:0,max=editMode==='mesh'?2:1;point.x=Math.max(min,Math.min(max,point.x+dx*step/1920));point.y=Math.max(min,Math.min(max,point.y+dy*step/1080));handles();saveLocal();e.preventDefault();}
+      if(nudge[e.key]){remember();const [dx,dy]=nudge[e.key],step=e.shiftKey?10:1,point=list[activePoint],before=structuredClone(o.mesh),min=editMode==='mesh'?-1:0,max=editMode==='mesh'?2:1;point.x=Math.max(min,Math.min(max,point.x+dx*step/1920));point.y=Math.max(min,Math.min(max,point.y+dy*step/1080));if(editMode==='mesh'&&!usablePerspective(o)){o.mesh=before;notify('Corner pin cannot cross or collapse.',true);}handles();saveLocal();e.preventDefault();}
     });
   }
   wireEditor(document.getElementById('warp-editor') as unknown as SVGSVGElement,()=>selected,true);
   for (let i = 0; i < 3; i++) {
     wireEditor(document.getElementById(`handles-${i}`) as unknown as SVGSVGElement,()=>i,false);
     $(`preview-${i}`).onclick = () => openPreview(i);
-    $(`send-${i}`).onclick = async () => {
+    $(`send-${i}`).onclick = () => void sendOutput(i);
+    $(`display-${i}`).onchange = () => {
+      const id = value(`display-${i}`);
+      if (id && rig.outputs.some((o, j) => j !== i && o.displayId === id)) { $<HTMLSelectElement>(`display-${i}`).value=rig.outputs[i].displayId;notify('That display is already assigned to another projector.', true); void updateDisplays(); return; }
+      remember(); rig.outputs[i].displayId = id; saveLocal();
+      children.get(rig.outputs[i].id)?.close();
+    };
+  }
+  async function sendOutput(i:number) {
       const o = rig.outputs[i];
       if (!o.displayId) { openPreview(i); notify(`${o.name} is preview only.`); return; }
       if (!window.mapper) { notify('Physical display routing requires the desktop app.', true); return; }
@@ -233,21 +315,20 @@ async function start() {
       }
       notify(String(lastError), true);
     };
-    $(`display-${i}`).onchange = () => {
-      const id = value(`display-${i}`);
-      if (id && rig.outputs.some((o, j) => j !== i && o.displayId === id)) { notify('That display is already assigned to another projector.', true); void updateDisplays(); return; }
-      remember(); rig.outputs[i].displayId = id; saveLocal();
-      children.get(rig.outputs[i].id)?.close();
-    };
-  }
+  $('open-all').onclick=async()=>{
+    // Open all children synchronously in the user gesture before awaiting IPC.
+    rig.outputs.forEach((_,i)=>openPreview(i));
+    for(let i=0;i<3;i++)await sendOutput(i);
+    await updateDisplays();
+  };
   document.querySelectorAll<HTMLButtonElement>('[data-reset]').forEach(button=>button.onclick=()=>{
     if(locked)return;remember();const index=Number(button.dataset.output);resetCalibration(rig,index,button.dataset.reset as ResetPart);selected=index;activePoint=0;saveLocal();refreshControls();
   });
-  $('warp-type').onchange=()=>{remember();changeWarp(rig.outputs[selected],value('warp-type') as WarpType);activePoint=0;saveLocal();refreshControls();};
+  $('warp-type').onchange=()=>{remember();const before=structuredClone(rig.outputs[selected]);changeWarp(rig.outputs[selected],value('warp-type') as WarpType);if(!usablePerspective(rig.outputs[selected])){rig.outputs[selected]=before;notify('These corner positions do not form a usable perspective pin. Reset the mesh or uncross its corners first.',true);}activePoint=0;saveLocal();refreshControls();};
   for(const id of ['mesh-cols','mesh-rows'])$(id).onchange=()=>{remember();changeWarp(rig.outputs[selected],'linear',Number(value('mesh-cols')),Number(value('mesh-rows')));activePoint=0;saveLocal();refreshControls();};
   for(const id of ['point-x','point-y'])$(id).onchange=()=>{
-    const n=Number(value(id));if(!Number.isFinite(n))return;remember();const o=rig.outputs[selected],point=(editMode==='mesh'?o.mesh:o.mask)[activePoint],min=editMode==='mesh'?-1:0,max=editMode==='mesh'?2:1;
-    if(id==='point-x')point.x=Math.max(min,Math.min(max,.5+n/1920));else point.y=Math.max(min,Math.min(max,.5-n/1080));saveLocal();handles();
+    const n=Number(value(id));if(!Number.isFinite(n))return;remember();const o=rig.outputs[selected],before=structuredClone(o.mesh),point=(editMode==='mesh'?o.mesh:o.mask)[activePoint],min=editMode==='mesh'?-1:0,max=editMode==='mesh'?2:1;
+    if(id==='point-x')point.x=Math.max(min,Math.min(max,.5+n/1920));else point.y=Math.max(min,Math.min(max,.5-n/1080));if(editMode==='mesh'&&!usablePerspective(o)){o.mesh=before;notify('Corner pin cannot cross or collapse.',true);}saveLocal();handles();
   };
   $('warp-zoom').onchange=()=>{
     const span=1.2/Number(value('warp-zoom')),x=(1-span)*960,y=(1-span)*540;
@@ -286,8 +367,9 @@ async function start() {
   $('lock').onclick = () => { locked = !locked; refreshControls(); };
   $('reset').onclick=()=>{remember();resetCalibration(rig,selected,editMode);saveLocal();refreshControls();};
   $('blackout').onclick = () => { blackout = !blackout; $('blackout').textContent = blackout ? 'BLACKOUT ON · Resume outputs' : 'Blackout outputs'; $('blackout').classList.toggle('blackout-on', blackout); };
-  $('undo').onclick = () => { if (locked || !undo.length) return; redo.push(JSON.stringify(rig)); rig = parseRig(undo.pop()!); saveLocal(); refreshControls(); void updateDisplays(); };
-  $('redo').onclick = () => { if (locked || !redo.length) return; undo.push(JSON.stringify(rig)); rig = parseRig(redo.pop()!); saveLocal(); refreshControls(); void updateDisplays(); };
+  function closeChangedAssignments(before:Rig){rig.outputs.forEach((o,i)=>{if(o.displayId!==before.outputs[i].displayId)children.get(o.id)?.close();});}
+  $('undo').onclick = () => { if (locked || !undo.length) return; redo.push(JSON.stringify(rig)); const before=rig;rig = parseRig(undo.pop()!);closeChangedAssignments(before); saveLocal(); refreshControls(); void updateDisplays(); };
+  $('redo').onclick = () => { if (locked || !redo.length) return; undo.push(JSON.stringify(rig)); const before=rig;rig = parseRig(redo.pop()!);closeChangedAssignments(before); saveLocal(); refreshControls(); void updateDisplays(); };
   $('save').onclick = () => {
     const url = URL.createObjectURL(new Blob([JSON.stringify(rig, null, 2)], { type: 'application/json' }));
     const a = document.createElement('a'); a.href = url; a.download = 'three-projector-rig.json'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); notify('Rig exported. Meshes, masks, overlap and display assignments included.');
@@ -330,6 +412,12 @@ async function start() {
   for (const id of ['ndi-source', 'connect', 'refresh', 'disconnect']) $<HTMLButtonElement>(id).disabled = !nativeAvailable;
   await updateDisplays(); await updateSources(); refreshControls(); notify('Preview-only rig ready. No projectors required. Drag a mesh point to calibrate.');
 
+  $('diagnostics').onclick=async()=>{
+    const info={version:'0.4.0',savedAt:new Date().toISOString(),displays,outputs:await window.mapper?.outputStatus?.()??[],source:rig.source,connected,ndiStatistics,receivedSequence:sequence,receivedFps:measuredFps,presentedFps,nominalFps,frameAgeMs:lastFrameAt?Math.round(performance.now()-lastFrameAt):null,renderMs:lastRenderMs,calibrationPattern,solo,identify,blackout,monitor,receiveError,rig};
+    const url=URL.createObjectURL(new Blob([JSON.stringify(info,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='mapper-diagnostics.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  };
+  if(recovered)notify('Recovered the previous disk autosave because the latest file was unreadable. Export this rig now.',true);
+
   async function poll() {
     if (busy || sourceMode !== 'ndi' || !connected || !window.mapper) return;
     busy = true; const generation = connectionGeneration; const requestedAt=performance.now();
@@ -363,17 +451,24 @@ async function start() {
       contentKey=nextContent;sourceRevision++;
     }
     // Operator input monitor is intentionally 30fps at reduced resolution; it does not throttle the outputs.
-    if(now-lastPreviewAt>1000/30){
+    if(monitor&&now-lastPreviewAt>1000/30&&(sourceMode==='pattern'||monitorSequence!==sequence||!live)){
       const w=sourceMode==='pattern'?l.width:latestFrame?.width??1920,h=sourceMode==='pattern'?1080:latestFrame?.height??1080;
       const pw=Math.min(1440,w),ph=Math.round(h*pw/w);
       if(raw.width!==pw||raw.height!==ph){raw.width=pw;raw.height=ph;}
       rawCtx.fillStyle='#000';rawCtx.fillRect(0,0,pw,ph);
       if(sourceMode==='pattern')rawCtx.drawImage(shared,0,0,pw,ph);else if(live&&latestFrame){if(rawFrame.width!==w||rawFrame.height!==h){rawFrame.width=w;rawFrame.height=h;}rawFrameCtx.putImageData(new ImageData(new Uint8ClampedArray(latestFrame.data.buffer as ArrayBuffer,latestFrame.data.byteOffset,latestFrame.data.byteLength),w,h),0,0);rawCtx.drawImage(rawFrame,0,0,pw,ph);}
-      raw.style.aspectRatio=`${w}/${h}`;lastPreviewAt=now;
+      raw.style.aspectRatio=`${w}/${h}`;lastPreviewAt=now;monitorSequence=sequence;
     }
-    const nextOutput=JSON.stringify([rig.outputs,blackout,selected]);
+    const nextOutput=JSON.stringify([rig.outputs,blackout,selected,calibrationPattern,solo,identify]);
     if(sourceDirty||outputKey!==nextOutput){
-      renderers.forEach((renderer,i)=>renderer.render(rig.outputs[i],i,rig,blackout||(sourceMode==='ndi'&&!live),sourceRevision));
+      renderers.forEach((renderer,i)=>{
+        const muted=blackout||(solo&&i!==selected)||(calibrationPattern==='none'&&sourceMode==='ndi'&&!live);
+        renderer.render(rig.outputs[i],i,rig,muted,sourceRevision,calibrationPattern);
+        if(identify&&!blackout&&(!solo||i===selected)){
+          const ctx=$<HTMLCanvasElement>(`projector-${i}`).getContext('2d')!;
+          ctx.fillStyle=['#14324a','#4a3614','#143d32'][i];ctx.fillRect(0,0,1920,1080);ctx.strokeStyle='#fff';ctx.lineWidth=12;ctx.strokeRect(6,6,1908,1068);ctx.fillStyle='#fff';ctx.textAlign='center';ctx.font='bold 160px Segoe UI,sans-serif';ctx.fillText(`${i+1} · ${rig.outputs[i].name}`,960,510);ctx.font='40px Segoe UI,sans-serif';ctx.fillText('RASTER IDENTIFICATION · disable before calibration',960,620);ctx.textAlign='left';
+        }
+      });
       if(warpDialog.open){
       const warpCanvas=$<HTMLCanvasElement>('warp-preview');
       if(warpCanvas.width!==1920){warpCanvas.width=1920;warpCanvas.height=1080;}
@@ -382,7 +477,8 @@ async function start() {
       if(live&&sequence!==lastPresentedSequence){presented++;lastPresentedSequence=sequence;}
       outputKey=nextOutput;lastRenderMs=performance.now()-started;
     }
-    if(tickCount===10&&smokeMode){
+    if(tickCount>=10&&smokeMode&&!smokeStarted){
+      smokeStarted=true;
       const testRig=defaultRig();testRig.fit='stretch';const pixels=new Uint8Array(4*2*4);
       for(let i=0;i<8;i++){pixels[i*4+(i<4?0:2)]=255;pixels[i*4+3]=255;}
       renderers[0].setInputFrame(pixels,4,2);let passed=true;
@@ -396,14 +492,36 @@ async function start() {
         });
       }
       renderers[0].useCanvas();sourceRevision++;renderers.forEach((r,i)=>r.render(rig.outputs[i],i,rig,blackout,sourceRevision));
-      void window.mapper?.ready?.({outputs:renderers.length,width:shared.width,frameTextureTest:passed});
+      // Also exercise shader masks, complementary edge fades, temporary patterns,
+      // then the actual canvas-stream/video path in all three separate windows.
+      const test=defaultRig();test.fit='stretch';setOverlap(test,192);
+      renderers[0].useCanvas();
+      const pixel=(i:number,x:number,y:number)=>$<HTMLCanvasElement>(`projector-${i}`).getContext('2d')!.getImageData(x,y,1,1).data[0];
+      renderers[0].render(test.outputs[0],0,test,false,sourceRevision,'white');const right=pixel(0,1824,500)/255;
+      renderers[1].render(test.outputs[1],1,test,false,sourceRevision,'white');const left=pixel(1,96,500)/255;
+      let calibrationTests=Math.abs(right**2.2+left**2.2-1)<.03;
+      test.outputs[0].mask[0].x=.5;test.outputs[0].mask[3].x=.5;
+      renderers[0].render(test.outputs[0],0,test,false,sourceRevision,'white');calibrationTests=calibrationTests&&pixel(0,100,500)<5&&pixel(0,1200,500)>240;
+      renderers[0].render(test.outputs[0],0,test,true,sourceRevision,'white');calibrationTests=calibrationTests&&pixel(0,1200,500)<5;
+      renderers[0].render(test.outputs[0],0,test,false,sourceRevision,'gray');calibrationTests=calibrationTests&&Math.abs(pixel(0,1200,500)-128)<3;
+      calibrationPattern='white';outputKey='';rig.outputs.forEach((_,i)=>openPreview(i));
+      const deadline=performance.now()+30000;
+      const verify=setInterval(()=>{
+        const outputStreams=rig.outputs.every(o=>{const r=outputReports.get(o.id);return r&&r.ready&&r.width===1920&&r.height===1080&&r.frames>=3&&r.pixel&&r.pixel[0]>240;});
+        if(outputStreams||performance.now()>deadline){clearInterval(verify);void window.mapper?.ready?.({outputs:renderers.length,width:shared.width,frameTextureTest:passed,calibrationTests,outputStreams});}
+      },200);
+
     }
     if(now-presentedAt>1000){presentedFps=(presented-presentedSample)*1000/(now-presentedAt);presentedSample=presented;presentedAt=now;}
     if(++tickCount%12===0){
       const age=lastFrameAt?now-lastFrameAt:Infinity;
+      $('output-summary').textContent=blackout?'BLACKOUT · all projector imagery is black':`${calibrationPattern==='none'?'Source input':calibrationPattern.toUpperCase()+' calibration pattern'}${solo?' · SOLO: '+rig.outputs[selected].name:''}${identify?' · IDENTIFY LABELS ON':''}`;
+      const mismatch=sourceMode==='ndi'&&latestFrame&&Math.abs(latestFrame.width/latestFrame.height-l.width/1080)>.05;
+      $('aspect-warning').hidden=!mismatch;
+      $('aspect-warning').textContent=mismatch?`Input is ${latestFrame!.width} × ${latestFrame!.height}; stage is ${l.width} × 1080. ${rig.fit==='contain'?'Fit adds empty areas, which can leave outer projectors black.':rig.fit==='cover'?'Fill crops the input.':'Stretch distorts the input.'} Match ProPresenter’s output aspect to the stage for continuous coverage.`:'';
       $('input-state').textContent=sourceMode==='pattern'?'TEST SOURCE':receiveError?'INPUT ERROR':!connected?'DISCONNECTED':!sequence?'WAITING FOR VIDEO':age>2000?'SIGNAL STALLED · OUTPUT BLACK':'RECEIVING';
       $('input-state').classList.toggle('live',live);
-      $('source-label').textContent=sourceMode==='pattern'?'TEST SOURCE · NOT NDI':`${rig.source||'NDI input'}${receiveError?' · '+receiveError:''}`;
+      $('source-label').textContent=!monitor?'INPUT MONITOR PAUSED · output rendering continues':sourceMode==='pattern'?'TEST SOURCE · NOT NDI':`${rig.source||'NDI input'}${receiveError?' · '+receiveError:''}`;
       $('count').textContent=sourceMode==='pattern'?'Test source':sequence.toLocaleString();
       $('resolution').textContent=sourceMode==='pattern'?`${l.width} × 1080`:`${latestFrame?.width??0} × ${latestFrame?.height??0}`;
       $('fps').textContent=sourceMode==='pattern'?'Output: display refresh':`${age<2000?measuredFps.toFixed(1):'0.0'} / ${presentedFps.toFixed(1)} / ${nominalFps.toFixed(2)}`;
@@ -411,10 +529,14 @@ async function start() {
     }
   }
   let animation=0,stopped=false,pollTimer:ReturnType<typeof setTimeout>;
-  const animate=()=>{try{render();}catch(e){renderFailed=true;notify(`Rendering stopped: ${String(e)}`,true);}if(!stopped)animation=requestAnimationFrame(animate);};
+  const animate=()=>{try{render();}catch(e){renderFailed=true;for(let i=0;i<3;i++){const c=$<HTMLCanvasElement>(`projector-${i}`),ctx=c.getContext('2d')!;ctx.fillStyle='#000';ctx.fillRect(0,0,c.width,c.height);}notify(`Rendering stopped; output canvases cleared to black. ${String(e)}. Use Restart preview engine; your calibration is saved.`,true);}if(!stopped)animation=requestAnimationFrame(animate);};
   const receive=async()=>{await poll();if(!stopped)pollTimer=setTimeout(()=>void receive(),connected?4:100);};
   animation=requestAnimationFrame(animate);void receive();
+  const statisticsTimer=setInterval(()=>{
+    if(connected&&window.mapper?.statistics)void window.mapper.statistics().then(stats=>{ndiStatistics=stats;$('ndi-statistics').textContent=stats?`NDI receiver: ${stats.connections??0} connection(s) · ${stats.queued??0} queued video frames · ${stats.dropped??0} SDK drops${stats.running?'':' · receiver stopped; reconnect'}`:'';}).catch(()=>{});
+    else $('ndi-statistics').textContent='';
+  },1000);
   const sourceTimer = setInterval(() => { if (nativeAvailable) void updateSources(); }, 3000);
   const displayTimer = setInterval(() => void updateDisplays(), 5000);
-  addEventListener('beforeunload', () => { stopped=true;cancelAnimationFrame(animation);clearTimeout(pollTimer); clearInterval(sourceTimer); clearInterval(displayTimer); for (const child of children.values()) child.close(); for (const stream of Object.values(window.mapperStreams || {})) stream.getTracks().forEach(t => t.stop()); renderers.forEach(r => r.dispose()); void window.mapper?.disconnect(); });
+  addEventListener('beforeunload', () => { stopped=true;cancelAnimationFrame(animation);clearTimeout(pollTimer); clearInterval(sourceTimer);clearInterval(statisticsTimer); clearInterval(displayTimer); for (const child of children.values()) child.close(); for (const stream of Object.values(window.mapperStreams || {})) stream.getTracks().forEach(t => t.stop()); renderers.forEach(r => r.dispose()); void window.mapper?.disconnect(); });
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { defaultRig, layout, setOverlap, parseRig, sourceRect, resetCalibration, overlapFromSeam } from './rig';
-import { changeWarp, sampleWarp } from './warp';
+import { changeWarp, sampleWarp, usablePerspective } from './warp';
 describe('three projector calibration', () => {
   it('keeps source coordinates continuous at both overlap seams', () => {
     const r = defaultRig(); setOverlap(r, 192);
@@ -49,6 +49,12 @@ describe('three projector calibration', () => {
   it('perspective pins land exactly at their four destinations',()=>{
     const o=defaultRig().outputs[0];changeWarp(o,'perspective');o.mesh=[{x:.1,y:.1},{x:.9,y:0},{x:0,y:1},{x:1,y:.8}];
     for(const [u,v,i] of [[0,0,0],[1,0,1],[0,1,2],[1,1,3]]){const p=sampleWarp(o,u,v);expect(p.x).toBeCloseTo(o.mesh[i].x);expect(p.y).toBeCloseTo(o.mesh[i].y);}
+  });
+  it('rejects collapsed and crossed perspective edits while allowing convex pinning',()=>{
+    const o=defaultRig().outputs[0];changeWarp(o,'perspective');expect(usablePerspective(o)).toBe(true);
+    o.mesh=[{x:.1,y:.1},{x:.9,y:0},{x:0,y:1},{x:1,y:.8}];expect(usablePerspective(o)).toBe(true);
+    o.mesh[3]={x:0,y:0};expect(usablePerspective(o)).toBe(false);
+    o.mesh[3]={...o.mesh[2]};expect(usablePerspective(o)).toBe(false);
   });
   it('fits a normal input inside a wide canvas without stretching', () => {
     expect(sourceRect(1920, 1080, 5760, 1080, 'contain')).toEqual({ x: 1920, y: 0, w: 1920, h: 1080 });

@@ -2,6 +2,8 @@
 import * as THREE from 'three';
 import { layout, sourceRect, type Projector, type Rig } from './rig';
 import { dimensions, sampleWarp } from './warp';
+export type CalibrationPattern = 'none' | 'grid' | 'white' | 'gray' | 'black' | 'bars';
+const patternCodes:Record<CalibrationPattern,number>={none:0,grid:1,white:2,gray:3,black:4,bars:5};
 type Backend = { renderer: THREE.WebGLRenderer; texture: THREE.Texture; dataMode: boolean; material: THREE.ShaderMaterial; width: number; height: number; revision: number; users: number };
 const backends = new WeakMap<HTMLCanvasElement, Backend>();
 function textureFor(source: HTMLCanvasElement) {
@@ -17,11 +19,11 @@ function backendFor(source: HTMLCanvasElement): Backend {
   const texture = textureFor(source);
   const material = new THREE.ShaderMaterial({
     side: THREE.DoubleSide, depthTest: false, depthWrite: false,
-    uniforms: { content: { value: new THREE.Vector4(0,0,1,1) }, sourceFlip: { value: 1 }, picture: { value: texture }, crop: { value: new THREE.Vector2() }, edges: { value: new THREE.Vector2() }, correction: { value: new THREE.Vector3() }, blendPower: { value: 1 }, masks: { value: Array.from({ length: 4 }, () => new THREE.Vector2()) } },
+    uniforms: { diagnostic: { value: 0 }, stageWidth:{value:5760}, content: { value: new THREE.Vector4(0,0,1,1) }, sourceFlip: { value: 1 }, picture: { value: texture }, crop: { value: new THREE.Vector2() }, edges: { value: new THREE.Vector2() }, correction: { value: new THREE.Vector3() }, blendPower: { value: 1 }, masks: { value: Array.from({ length: 4 }, () => new THREE.Vector2()) } },
       vertexShader: `attribute float warpW; varying vec2 local;
         void main(){local=uv; gl_Position=vec4(position.xy*warpW,0.,warpW);}`,
       fragmentShader: `precision highp float;
-        uniform sampler2D picture; uniform vec4 content; uniform float sourceFlip; uniform vec2 crop; uniform vec2 edges;
+        uniform float diagnostic; uniform float stageWidth; uniform sampler2D picture; uniform vec4 content; uniform float sourceFlip; uniform vec2 crop; uniform vec2 edges;
         uniform vec3 correction; uniform float blendPower; uniform vec2 masks[4]; varying vec2 local;
         void main(){vec2 target=vec2(gl_FragCoord.x/1920.,1.-gl_FragCoord.y/1080.);
           bool inside=false;
@@ -31,17 +33,32 @@ function backendFor(source: HTMLCanvasElement): Backend {
             }
           }
           if(!inside){gl_FragColor=vec4(0.,0.,0.,1.);return;}
-          vec2 p=vec2(crop.x+local.x*crop.y,local.y);
-          p=(p-content.xy)/content.zw;
-          if(any(lessThan(p,vec2(0.)))||any(greaterThan(p,vec2(1.)))){gl_FragColor=vec4(0.,0.,0.,1.);return;}
-          if(sourceFlip>0.5)p.y=1.-p.y;
-          vec4 sampleColor=texture2D(picture,p);
-          vec3 color=pow(max(sampleColor.rgb,vec3(0.)),vec3(2.2))*sampleColor.a;
+          vec2 stage=vec2(crop.x+local.x*crop.y,local.y);
+          vec3 color;
+          if(diagnostic>0.5){
+            color=vec3(1.);
+            if(diagnostic<1.5){
+              vec2 pixel=stage*vec2(stageWidth,1080.);
+              vec2 cell=mod(pixel,vec2(120.));
+              float line=1.-step(2.,min(min(cell.x,120.-cell.x),min(cell.y,120.-cell.y)));
+              color=mix(vec3(.015),vec3(1.),line);
+              if(abs(pixel.y-540.)<2.)color=vec3(1.,0.,0.);
+            }else if(diagnostic<2.5)color=vec3(1.);
+            else if(diagnostic<3.5)color=vec3(pow(.5,2.2));
+            else if(diagnostic<4.5)color=vec3(0.);
+            else {float bar=floor(stage.x*8.);color=bar<1.?vec3(1.):bar<2.?vec3(1.,1.,0.):bar<3.?vec3(0.,1.,1.):bar<4.?vec3(0.,1.,0.):bar<5.?vec3(1.,0.,1.):bar<6.?vec3(1.,0.,0.):bar<7.?vec3(0.,0.,1.):vec3(0.);}
+          }else{
+            vec2 p=(stage-content.xy)/content.zw;
+            if(any(lessThan(p,vec2(0.)))||any(greaterThan(p,vec2(1.)))){gl_FragColor=vec4(0.,0.,0.,1.);return;}
+            if(sourceFlip>0.5)p.y=1.-p.y;
+            vec4 sampleColor=texture2D(picture,p);
+            color=pow(max(sampleColor.rgb,vec3(0.)),vec3(2.2))*sampleColor.a;
+          }
           float weight=1.;
           if(edges.x>0.)weight*=smoothstep(0.,edges.x,local.x);
           if(edges.y>0.)weight*=smoothstep(0.,edges.y,1.-local.x);
           weight=pow(weight,blendPower);
-          color=color*correction.x*weight+vec3(correction.z*weight);
+          color=color*correction.x*weight+vec3((diagnostic>3.5&&diagnostic<4.5?0.:correction.z)*weight);
           gl_FragColor=vec4(pow(clamp(color,0.,1.),vec3(1./correction.y)),1.);
         }`
   });
@@ -74,7 +91,7 @@ export class ProjectorRenderer {
     const b=this.backend;if(!b.dataMode)return;
     b.texture.dispose();b.texture=textureFor(this.source);b.width=this.source.width;b.height=this.source.height;b.material.uniforms.picture.value=b.texture;b.dataMode=false;b.revision=-1;
   }
-  render(output: Projector, index: number, rig: Rig, blackout: boolean, revision: number) {
+  render(output: Projector, index: number, rig: Rig, blackout: boolean, revision: number, diagnostic:CalibrationPattern='none') {
     const b = this.backend;
     if (!b.dataMode && (this.source.width !== b.width || this.source.height !== b.height)) {
       b.texture.dispose(); b.texture = textureFor(this.source);
@@ -100,6 +117,7 @@ export class ProjectorRenderer {
       this.meshKey = key;
     }
     const l = layout(rig.overlap,rig.rightOverlap??rig.overlap), u = b.material.uniforms;
+    u.diagnostic.value=patternCodes[diagnostic];u.stageWidth.value=l.width;
     u.crop.value.set(l.starts[index] / l.width, 1920 / l.width);
     const bounds=b.dataMode?sourceRect(b.width,b.height,l.width,1080,rig.fit):{x:0,y:0,w:l.width,h:1080};
     u.content.value.set(bounds.x/l.width,bounds.y/1080,bounds.w/l.width,bounds.h/1080);
