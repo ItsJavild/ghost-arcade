@@ -1,4 +1,4 @@
-# Three Projector Mapper 0.2.0
+# Three Projector Mapper 0.3.0
 
 Windows x64 projection mapper derived from Ghost Arcade. One local ProPresenter
 NDI input, one continuous stage, three independently calibrated 1920×1080
@@ -18,7 +18,7 @@ switching versions; 0.1.0 rigs import into 0.2.0 without discarding calibration.
 
 ## Layout and blending
 
-Step 02 defines source regions on a common stage. Set overlap in pixels using
+The Calibration workspace combines canvas layout, overlap, display routing and projector calibration. Use Selected projector to switch between the three independent outputs. It defines source regions on a common stage. Set overlap in pixels using
 numeric fields, sliders, or draggable seam handles on the overview. Seams are
 linked by default; uncheck Link both seams to adjust left/center and center/right
 independently. Stage width is `5760 - left overlap - right overlap`, at 1080 high.
@@ -32,8 +32,8 @@ For a wide image, configure ProPresenter to send the matching stage aspect ratio
 
 ## Warp adjustment
 
-Select a projector by clicking its calibration preview. The large editor below
-shows the selected output route with extra space around its raster. Geometry
+Select a projector in Calibration and choose Open warp adjustment. A separate
+modal tool (Done or Escape closes it) shows the selected output route with extra space around its raster. Geometry
 can extend beyond the raster; final output always clips to the physical projector.
 Blend zones belong to the full region, including its edges, and warp with it.
 
@@ -60,6 +60,15 @@ Calibration lock prevents editing and resets. Meshes can be folded by extreme
 edits; reset geometry if that happens. Masks cannot eliminate projector black-floor light.
 
 ## Frame rate and latency
+
+The input monitor refreshes at up to 30fps; this limit does not cap output rendering.
+The warp tool only copies its preview while open. NDI reception, GPU rendering and
+operator thread scheduling are shared with physical outputs. Output windows use
+canvas capture streams and video presentation, which can add buffering. App frame
+age is not an end-to-end measurement; compare a source clock with a physical
+projector to measure actual latency. A delayed preview alone cannot prove output
+latency is acceptable.
+
 
 The 0.1.0 presentation timer was capped at 30fps. Version 0.2.0 instead:
 

@@ -45,7 +45,7 @@ async function start() {
   const undo: string[] = [], redo: string[] = [], children = new Map<string, Window>();
   try { const saved = localStorage.getItem('mapper-rig-v1'); if (saved) rig = parseRig(saved); } catch { /* default rig if old/corrupt */ }
   root.innerHTML = `
-    <header><div class="brand"><span class="mark">◩</span><div><h1>Three Projector Mapper <small>PROTOTYPE 0.2 · WINDOWS x64</small></h1><p>One source. Three calibrated outputs.</p></div></div><div class="actions"><button id="undo">Undo</button><button id="redo">Redo</button><button id="load">Load rig</button><button id="save">Save rig</button><button id="blackout" class="danger">Blackout outputs</button></div></header>
+    <header><div class="brand"><span class="mark">◩</span><div><h1>Three Projector Mapper <small>PROTOTYPE 0.3 · WINDOWS x64</small></h1><p>One source. Three calibrated outputs.</p></div></div><div class="actions"><button id="undo">Undo</button><button id="redo">Redo</button><button id="load">Load rig</button><button id="save">Save rig</button><button id="blackout" class="danger">Blackout outputs</button></div></header>
     <div id="notice" role="status" aria-live="polite">Starting previews…</div>
     <main>
       <section class="panel input"><div class="section-head"><h2><span class="step">01</span> Input</h2><span id="input-state" class="badge">TEST SOURCE</span></div>
@@ -55,17 +55,16 @@ async function start() {
         <div class="metrics"><div><span>RECEIVED</span><strong id="count">—</strong></div><div><span>INPUT SIZE</span><strong id="resolution">—</strong></div><div><span>RECEIVED / PRESENTED / SOURCE FPS</span><strong id="fps">—</strong></div><div><span>APP FRAME AGE · NOT END-TO-END</span><strong id="age">—</strong></div></div>
         <p class="muted attribution"><a href="https://ndi.video/" target="_blank" rel="noreferrer">NDI®</a> is a registered trademark of Vizrt NDI AB.</p>
       </section>
-      <section class="panel"><div class="section-head"><h2><span class="step">02</span> Canvas & overlap</h2><strong id="canvas-size"></strong></div>
+      <section class="panel calibration"><div class="section-head"><h2><span class="step">02</span> Calibration</h2><strong id="canvas-size"></strong></div>
         <div class="canvas-controls"><label>Left / center overlap (px)<input id="overlap" type="number" min="0" max="768" step="1"></label><label class="overlap-drag">Drag overlap<input id="overlap-slider" type="range" min="0" max="768" step="1"></label><label><input id="link-overlaps" type="checkbox" checked>Link both seams</label><label>Center / right overlap (px)<input id="right-overlap" type="number" min="0" max="768" step="1"></label><label class="overlap-drag">Drag right overlap<input id="right-overlap-slider" type="range" min="0" max="768" step="1"></label><button id="reset-overlap">Reset overlaps</button><label>Input scaling<select id="fit"><option value="contain">Fit — preserve entire input</option><option value="cover">Fill — crop to canvas</option><option value="stretch">Stretch to canvas</option></select></label><button id="refresh-displays">Refresh displays</button><button id="close-outputs">Close output windows</button></div>
         <div id="overview" aria-label="Three-projector source crop overview"></div><p class="muted">The overview fits your window. Output resolution stays 1920 × 1080. Drag either seam handle or the overlap slider. Link both seams or adjust them independently; hatched areas contain duplicated source pixels and automatic fades.</p>
-      </section>
-      <section><div class="section-head"><h2><span class="step">03</span> Projector calibration</h2><div class="actions"><button id="mesh-mode" class="active">Mesh warp</button><button id="mask-mode">Screen mask</button><button id="lock">Lock calibration</button></div></div>
+      <div class="section-head projector-toolbar"><label>Selected projector<select id="projector-select">${rig.outputs.map((o,i)=>`<option value="${i}">${escape(o.name)}</option>`).join('')}</select></label><div class="actions"><button id="open-warp">Open warp adjustment…</button><button id="mesh-mode" class="active">Mesh warp</button><button id="mask-mode">Screen mask</button><button id="lock">Lock calibration</button></div></div>
         <div class="projectors">${rig.outputs.map((o, i) => `<article class="panel projector" data-index="${i}"><div class="section-head"><h3>${escape(o.name)}</h3><span class="badge">1920 × 1080</span></div><div class="projector-preview"><canvas id="projector-${i}"></canvas><svg id="handles-${i}" viewBox="0 0 1920 1080" aria-label="${escape(o.name)} calibration handles"></svg></div><label>Output destination<select id="display-${i}"></select></label><div class="actions"><button id="preview-${i}">Open preview</button><button id="send-${i}">Send to display</button></div><div class="resets">${(["mesh","mask","blend","all"] as const).map(part=>`<button data-reset="${part}" data-output="${i}">Reset ${part==='blend'?'blend/color':part}</button>`).join('')}</div></article>`).join('')}</div>
-        <div class="panel warp-panel"><div class="section-head"><h3>Warp adjustment · selected projector</h3><div class="actions"><label>Zoom<select id="warp-zoom"><option value="1">Fit route + margin</option><option value="1.5">150%</option><option value="2">200%</option><option value="0.5">50%</option></select></label><label><input id="show-blends" type="checkbox" checked>Show blend zones</label></div></div>
+        <dialog id="warp-dialog" aria-labelledby="warp-title"><div class="panel warp-panel"><div class="section-head"><h3 id="warp-title">Warp adjustment</h3><button id="close-warp">Done</button></div><div class="section-head"><div class="actions"><label>Zoom<select id="warp-zoom"><option value="1">Fit route + margin</option><option value="1.5">150%</option><option value="2">200%</option><option value="0.5">50%</option></select></label><label><input id="show-blends" type="checkbox" checked>Show blend zones</label></div></div>
           <div class="warp-controls"><label>Warp type<select id="warp-type"><option value="perspective">Perspective · corner pin</option><option value="linear">Linear · mesh</option><option value="bezier">Bézier · curved surface</option></select></label><label>Horizontal mesh splits<select id="mesh-cols">${[1,2,4,8,16,32].map(n=>`<option value="${n+1}">${n}</option>`).join('')}</select></label><label>Vertical mesh splits<select id="mesh-rows">${[1,2,4,8,16,32].map(n=>`<option value="${n+1}">${n}</option>`).join('')}</select></label><label>Selected X · center origin<input id="point-x" type="number" step="1"></label><label>Selected Y · up<input id="point-y" type="number" step="1"></label></div>
           <div class="warp-workspace"><canvas id="warp-preview"></canvas><svg id="warp-editor" tabindex="0" role="application" aria-label="Selected projector warp editor" viewBox="-192 -108 2304 1296"></svg></div>
           <p class="muted">Warp the full region, including its blend zones. Drag a point or an edge handle; Alt-drag moves the region. Shift-drag fine-tunes; Ctrl disables snapping. Arrow keys nudge 1 px (Shift: 10 px); W/A/S/D select neighboring points. Geometry may extend beyond the route; the output clips to the projector raster.</p>
-        </div>
+        </div></dialog>
         <div class="panel inspector"><div class="section-head"><h3 id="selected-title"></h3><button id="reset">Reset selected geometry</button></div><p id="edit-help" class="muted"></p><div class="calibration-controls">
           <label>Left blend (%)<input id="blend-left" type="number" min="0" max="50" step="0.1"></label><label>Right blend (%)<input id="blend-right" type="number" min="0" max="50" step="0.1"></label><label>Display gamma<input id="gamma" type="number" min="1" max="4" step="0.1"></label><label>Brightness<input id="brightness" type="number" min="0" max="2" step="0.05"></label><label><input id="auto-blend" type="checkbox">Auto edge blends</label><label>Blend gamma<input id="blend-gamma" type="number" min="0.2" max="4" step="0.1"></label><label>Black-level lift<input id="black" type="number" min="0" max="0.2" step="0.005"></label>
         </div></div>
@@ -76,6 +75,10 @@ async function start() {
   const notify = (message: string, bad = false) => { $('notice').textContent = message; $('notice').classList.toggle('error', bad); };
   const remember = () => { undo.push(JSON.stringify(rig)); if (undo.length > 100) undo.shift(); redo.length = 0; };
   const saveLocal = () => { try { localStorage.setItem('mapper-rig-v1', JSON.stringify(rig)); } catch { notify('Rig autosave unavailable. Use Save rig to export a file.', true); } };
+  const warpDialog = $<HTMLDialogElement>('warp-dialog');
+  $('open-warp').onclick = () => { warpDialog.showModal(); outputKey=''; refreshControls(); };
+  $('close-warp').onclick = () => warpDialog.close();
+  $('projector-select').onchange = () => { selected=Number(value('projector-select'));activePoint=0;refreshControls(); };
   const raw = $<HTMLCanvasElement>('input-preview'), rawCtx = raw.getContext('2d')!;
   const shared = document.createElement('canvas'), sharedCtx = shared.getContext('2d')!;
   const rawFrame = document.createElement('canvas'), rawFrameCtx = rawFrame.getContext('2d')!;
@@ -119,6 +122,9 @@ async function start() {
   }
   function refreshControls() {
     const o = rig.outputs[selected];
+    $<HTMLSelectElement>('projector-select').value=String(selected);
+    $('warp-title').textContent=`${o.name} · ${editMode==='mesh'?'Warp adjustment':'Screen mask'}`;
+    document.querySelectorAll<HTMLElement>('.projector').forEach((card,i)=>{card.hidden=i!==selected;});
     $('selected-title').textContent = `${o.name} · ${editMode === 'mesh' ? `${o.warpType??'linear'} warp` : 'four-point projector mask'}`;
     $('edit-help').textContent = locked ? 'Calibration is locked.' : editMode === 'mesh' ? 'Select a point to edit its coordinates, or drag points and edges in Warp adjustment. Blend zones move with the warp.' : 'Drag the four mask points to clip light to the screen boundary. Mask coordinates are independent of the mesh.';
     for (const [id, v] of Object.entries({ 'blend-left': o.left * 100, 'blend-right': o.right * 100, gamma: o.gamma, brightness: o.brightness, black: o.black, overlap: rig.overlap })) $<HTMLInputElement>(id).value = String(Math.round(v * 10000) / 10000);
@@ -368,9 +374,11 @@ async function start() {
     const nextOutput=JSON.stringify([rig.outputs,blackout,selected]);
     if(sourceDirty||outputKey!==nextOutput){
       renderers.forEach((renderer,i)=>renderer.render(rig.outputs[i],i,rig,blackout||(sourceMode==='ndi'&&!live),sourceRevision));
+      if(warpDialog.open){
       const warpCanvas=$<HTMLCanvasElement>('warp-preview');
       if(warpCanvas.width!==1920){warpCanvas.width=1920;warpCanvas.height=1080;}
       warpCanvas.getContext('2d',{alpha:false})!.drawImage($<HTMLCanvasElement>(`projector-${selected}`),0,0);
+      }
       if(live&&sequence!==lastPresentedSequence){presented++;lastPresentedSequence=sequence;}
       outputKey=nextOutput;lastRenderMs=performance.now()-started;
     }
