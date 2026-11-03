@@ -3,6 +3,13 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { rigStore } = require('./rig-store.cjs');
 let main, ndi, error = '', lastSequence = 0;
+// Projector playback must continue when another application covers the operator
+// or output windows. backgroundThrottling alone does not bypass Windows native
+// occlusion in this Chromium build (covered videos decoded but presented no frames).
+if(process.platform==='win32'){
+  app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+  app.commandLine.appendSwitch('disable-features','CalculateNativeWinOcclusion');
+}
 const smoke = process.argv.includes('--mapper-smoke-test') && !!process.env.MAPPER_SMOKE_REPORT;
 if (smoke) {
   app.commandLine.appendSwitch('use-angle', 'swiftshader');

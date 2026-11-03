@@ -23,7 +23,9 @@ included beside the executable. Connect all displays before launch and put the
 operator window on the control monitor before routing outputs. The operator
 monitor is pinned while physical outputs are active. The app prevents display
 sleep, blocks accidental reload/zoom shortcuts and prompts before closing active
-outputs. A second launch focuses the existing mapper instead of competing for NDI.
+outputs. Windows native occlusion backgrounding is disabled so covered operator/output
+windows keep rendering; the packaged test deliberately stacks the previews and
+requires changing frames in all three. A second launch focuses the existing mapper instead of competing for NDI.
 
 **Open all assigned outputs** routes assigned displays and opens placeholders for
 unassigned outputs. **Identify outputs** shows raster labels (bypasses geometry)
