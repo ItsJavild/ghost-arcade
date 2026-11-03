@@ -1,0 +1,24 @@
+Three Projector Mapper 0.1.0 — private test build
+
+Application and derived Ghost Arcade code: AGPL-3.0-only; see LICENSE.
+Original Ghost Arcade: Copyright 2024–2026 Risk Capital Media LLC.
+Source: https://github.com/ItsJavild/ghost-arcade/tree/mapper/windows-bundle/mapper
+
+NDI runtime: Copyright Vizrt NDI AB and its licensors. All rights reserved.
+The NDI runtime is a separate proprietary component, not licensed under AGPL.
+Its use is subject to the included NDI SDK License Agreement and applicable
+third-party notices. The restrictions in that agreement apply to the NDI
+component, not to the AGPL application code. Review the included agreement
+before using this test package. NDI® is a registered trademark of Vizrt NDI AB.
+https://ndi.video/
+
+The NDI runtime may not be modified or reverse engineered, its technical
+limitations may not be circumvented, and its proprietary notices must be
+preserved, subject to applicable law. NDI and its licensors provide no
+warranties and disclaim liability to the extent permitted by the agreement
+and applicable law. Applicable export laws must be followed. The full SDK
+agreement governs; this summary does not replace it.
+
+Electron, Chromium, Node.js, Three.js and their dependencies retain their own
+licenses and notices. See Electron's LICENSE and LICENSES.chromium.html in
+the application directory and npm dependency license files in the source.

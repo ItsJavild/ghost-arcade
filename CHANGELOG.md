@@ -1,5 +1,14 @@
 # Ghost Arcade - Development Changelog
 
+## Fork prototype — Three Projector Mapper (November 3, 2026)
+
+- Added the separate `mapper/` application with a wide-canvas input preview,
+  three preview-only 1080p outputs, independent 5×5 meshes and four-point masks,
+  overlap/blend controls, blackout, and saved calibration.
+- Added a Windows x64 receiver bridge using the official NDI SDK's dynamic
+  runtime loading and a native capture worker, plus build/launch instructions.
+  Windows NDI reception and physical projector output still require hardware validation.
+
 ---
 
 ## v1.9.99 - Live Performance and Control Polish (July 2026)

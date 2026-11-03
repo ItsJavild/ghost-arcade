@@ -1,0 +1,85 @@
+name: Mapper Windows bundle
+on:
+  push:
+    branches: [mapper/windows-bundle]
+    paths: ['mapper/**', '.github/workflows/mapper-windows.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  bundle:
+    runs-on: windows-2022
+    defaults:
+      run:
+        working-directory: mapper
+        shell: pwsh
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: mapper/package-lock.json
+      - name: Download official NDI SDK
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://downloads.ndi.tv/SDK/NDI_SDK/NDI%206%20SDK.exe'
+          Invoke-WebRequest $url -OutFile "$env:RUNNER_TEMP\ndi-sdk.exe"
+          $sig = Get-AuthenticodeSignature "$env:RUNNER_TEMP\ndi-sdk.exe"
+          if ($sig.Status -ne 'Valid') { throw "Invalid SDK signature: $($sig.Status)" }
+          $process = Start-Process "$env:RUNNER_TEMP\ndi-sdk.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/DIR=' + "$env:RUNNER_TEMP\ndi-sdk") -Wait -PassThru
+          if ($process.ExitCode -notin @(0,3010)) { throw "SDK installer exited $($process.ExitCode)" }
+          "NDI_SDK_DIR=$env:RUNNER_TEMP\ndi-sdk" >> $env:GITHUB_ENV
+          Get-ChildItem "$env:RUNNER_TEMP\ndi-sdk" | Select-Object Name
+      - name: Install dependencies
+        run: npm ci
+      - name: Build and test receiver
+        run: |
+          npm run native:build
+          if ($LASTEXITCODE -ne 0) { throw 'NDI receiver compilation failed' }
+          $env:MAPPER_NDI_RUNTIME = "$env:NDI_SDK_DIR\Bin\x64\Processing.NDI.Lib.x64.dll"
+          node scripts/check-native.cjs
+          if ($LASTEXITCODE -ne 0) { throw 'Receiver initialization failed' }
+          npm test
+          if ($LASTEXITCODE -ne 0) { throw 'Calibration tests failed' }
+      - name: Stage runtime and notices
+        run: |
+          New-Item bundle/runtime,bundle/licenses -ItemType Directory -Force | Out-Null
+          Copy-Item "$env:NDI_SDK_DIR\Bin\x64\*.dll" bundle/runtime/
+          $licenses = Get-ChildItem $env:NDI_SDK_DIR -Recurse -File | Where-Object { $_.Name -match 'licen[sc]e|third.?party|copyright' -and $_.Extension -match '\.(txt|pdf|rtf|md|html)$' }
+          foreach ($file in $licenses) { Copy-Item $file.FullName (Join-Path 'bundle/licenses' $file.Name) -Force }
+          Invoke-WebRequest 'https://downloads.ndi.tv/SDK/NDI_SDK/NDI%20SDK%20License%20Agreement.pdf' -OutFile bundle/licenses/NDI-SDK-License-Agreement.pdf
+          Copy-Item LICENSE bundle/licenses/Mapper-AGPL-3.0.txt
+          Copy-Item THIRD-PARTY-NOTICES.txt bundle/licenses/
+          Get-ChildItem bundle/runtime,bundle/licenses
+      - name: Package Windows x64
+        run: |
+          $env:MAPPER_NDI_RUNTIME = "$env:NDI_SDK_DIR\Bin\x64\Processing.NDI.Lib.x64.dll"
+          npm run package:win
+          if ($LASTEXITCODE -ne 0) { throw 'Packaging failed' }
+      - name: Smoke-test packaged application
+        run: |
+          $env:MAPPER_SMOKE_REPORT = "$env:RUNNER_TEMP\mapper-smoke.json"
+          Remove-Item Env:MAPPER_NDI_RUNTIME -ErrorAction SilentlyContinue
+          Remove-Item Env:NDI_RUNTIME_DIR_V5,Env:NDI_RUNTIME_DIR_V6 -ErrorAction SilentlyContinue
+          $app = Get-ChildItem release/win-unpacked -Filter '*.exe' | Where-Object Name -ne 'elevate.exe' | Select-Object -First 1
+          $process = Start-Process $app.FullName -ArgumentList '--mapper-smoke-test' -PassThru
+          if (-not $process.WaitForExit(90000)) { $process.Kill(); throw 'Packaged app smoke test timed out' }
+          if ($process.ExitCode -ne 0) { throw "Packaged smoke test exited $($process.ExitCode)" }
+          $report = Get-Content $env:MAPPER_SMOKE_REPORT -Raw | ConvertFrom-Json
+          $report | ConvertTo-Json -Depth 5
+          if (-not $report.ndi -or -not $report.preview -or $report.outputs -ne 3) { throw 'Packaged self-test failed' }
+          Copy-Item $env:MAPPER_SMOKE_REPORT release/mapper-smoke.json
+          Copy-Item ($env:MAPPER_SMOKE_REPORT + '.png') release/mapper-preview.png
+          Get-FileHash release/*.zip -Algorithm SHA256 | Format-List | Out-File release/SHA256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Three-Projector-Mapper-Windows-x64
+          path: |
+            mapper/release/*.zip
+            mapper/release/mapper-smoke.json
+            mapper/release/SHA256.txt
+            mapper/release/mapper-preview.png
+          retention-days: 14

@@ -1,0 +1,65 @@
+{
+  "name": "three-projector-mapper",
+  "version": "0.1.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 1430 --strictPort",
+    "desktop": "npm run build && electron .",
+    "build": "tsc --noEmit && vite build",
+    "test": "vitest run",
+    "native:build": "cmake-js compile --directory native --arch x64",
+    "package:win": "npm run build && node scripts/check-native.cjs && electron-builder --win --x64 --publish never"
+  },
+  "dependencies": {
+    "three": "0.184.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.184.0",
+    "cmake-js": "^8.0.0",
+    "electron": "^42.0.0",
+    "electron-builder": "^26.8.1",
+    "node-addon-api": "^8.3.1",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.1",
+    "vitest": "^4.1.0"
+  },
+  "build": {
+    "appId": "local.threeprojector.mapper",
+    "productName": "Three Projector Mapper",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "native/build/Release/ndi_receiver.node",
+      "LICENSE",
+      "README.md",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "native/**/*.node"
+    ],
+    "extraFiles": [
+      { "from": "bundle/runtime", "to": ".", "filter": ["*.dll"] },
+      { "from": "bundle/licenses", "to": "third-party", "filter": ["**/*"] }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
