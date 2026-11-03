@@ -7,6 +7,7 @@ import { drawTestPattern } from './testPatterns';
 type Display = { id: string; name: string; width: number; height: number; operator: boolean; refreshRate?:number };
 type Frame = { width: number; height: number; sequence: number; fps: number; ageMs: number; data: Uint8Array };
 type Bridge = {
+  exportFile?(kind:'rig'|'diagnostics',text:string):Promise<string|null>;
   readRig?():Promise<{current:string|null;previous:string|null}>; saveRig?(text:string):Promise<boolean>;
   outputStatus?():Promise<{id:string;displayId:string;fullscreen:boolean}[]>;
   status(): Promise<{ available: boolean; error: string; smoke?: boolean }>;
@@ -14,7 +15,7 @@ type Bridge = {
   sources(): Promise<string[]>; connect(name: string): Promise<void>; disconnect(): Promise<void>;
   frame(): Promise<Frame | null>; displays(): Promise<Display[]>;
   openOutput(id: string, displayId: string): Promise<void>; closeOutputs(): Promise<void>;
-  ready?(info: { outputs: number; width: number; frameTextureTest: boolean; outputStreams?:boolean; calibrationTests?:boolean }): Promise<unknown>;
+  ready?(info: { outputs: number; width: number; frameTextureTest: boolean; outputStreams?:boolean; calibrationTests?:boolean; outputDetails?:unknown }): Promise<unknown>;
 };
 declare global { interface Window { mapper?: Bridge; mapperStreams?: Record<string, MediaStream> } }
 const root = document.querySelector<HTMLDivElement>('#app')!;
@@ -25,17 +26,23 @@ if (outputId && /^projector-[0-2]$/.test(outputId)) {
   document.body.className = 'output-window';
   root.innerHTML = '<video autoplay muted playsinline></video><span class="waiting">Waiting for operator preview stream… · Escape closes output</span>';
   const video = root.querySelector('video')!;
-  let presentedFrames=0;
-  const onFrame=()=>{presentedFrames++;video.requestVideoFrameCallback(onFrame);};
+  let presentedFrames=0,whiteFrames=0,grayFrames=0,pixel:number[]|undefined;
+  const probe=new URLSearchParams(location.search).has('probe');
+  const sample=document.createElement('canvas');sample.width=sample.height=1;
+  const sampleContext=sample.getContext('2d')!;
+  const onFrame=()=>{
+    presentedFrames++;
+    if(probe&&video.readyState>=2){
+      sampleContext.drawImage(video,960,540,1,1,0,0,1,1);pixel=Array.from(sampleContext.getImageData(0,0,1,1).data);
+      if(pixel.slice(0,3).every(n=>n>240))whiteFrames++;
+      if(pixel.slice(0,3).every(n=>Math.abs(n-128)<6))grayFrames++;
+    }
+    video.requestVideoFrameCallback(onFrame);
+  };
   video.requestVideoFrameCallback(onFrame);
   const report=setInterval(()=>{
     if(!window.opener||window.opener.closed){clearInterval(report);window.close();return;}
-    let pixel:number[]|undefined;
-    if(new URLSearchParams(location.search).has('probe')&&video.readyState>=2){
-      const sample=document.createElement('canvas');sample.width=sample.height=1;
-      const ctx=sample.getContext('2d')!;ctx.drawImage(video,960,540,1,1,0,0,1,1);pixel=Array.from(ctx.getImageData(0,0,1,1).data);
-    }
-    window.opener.postMessage({type:'mapper-output',id:outputId,width:video.videoWidth,height:video.videoHeight,frames:presentedFrames,ready:video.readyState>=2,pixel},'*');
+    window.opener.postMessage({type:'mapper-output',id:outputId,width:video.videoWidth,height:video.videoHeight,frames:presentedFrames,ready:video.readyState>=2,pixel,whiteFrames,grayFrames},'*');
   },1000);
   const wait = setInterval(() => {
     try {
@@ -63,7 +70,8 @@ async function start() {
   let activePoint=0, sourceRevision=0, contentKey='', outputKey='', lastPreviewAt=0, presented=0, presentedFps=0, presentedSample=0, presentedAt=performance.now(), lastPresentedSequence=0, lastRenderMs=0;
   let calibrationPattern:CalibrationPattern='none',solo=false,identify=false,monitor=true,monitorSequence=-1;
   let recoveryCopy:string|null=null, recovered=false, smokeStarted=false;
-  const outputReports=new Map<string,{width:number;height:number;frames:number;ready:boolean;pixel?:number[];at:number}>();
+  const routeErrors=new Map<string,string>();
+  const outputReports=new Map<string,{width:number;height:number;frames:number;ready:boolean;pixel?:number[];whiteFrames?:number;grayFrames?:number;at:number}>();
   const undo: string[] = [], redo: string[] = [], children = new Map<string, Window>();
   try { const saved = localStorage.getItem('mapper-rig-v1'); if (saved) rig = parseRig(saved); } catch { /* default rig if old/corrupt */ }
   try {
@@ -217,15 +225,15 @@ async function start() {
     rig.outputs.forEach((o, i) => {
       const select = $<HTMLSelectElement>(`display-${i}`);
       if (document.activeElement===select)return;
-      select.innerHTML = '<option value="">Preview only — no projector needed</option>' + displays.filter(d => !d.operator).map(d => `<option value="${escape(d.id)}">${escape(d.name)} · ${d.width} × ${d.height}${d.refreshRate?` · ${Math.round(d.refreshRate)} Hz`:''}</option>`).join('');
+      select.innerHTML = '<option value="">Preview only — no projector needed</option>' + displays.filter(d => !d.operator).map(d => `<option value="${escape(d.id)}">${escape(d.name)} [${escape(d.id)}] · ${d.width} × ${d.height}${d.refreshRate?` · ${Math.round(d.refreshRate)} Hz`:''}</option>`).join('');
       if (o.displayId && !displays.some(d => d.id === o.displayId && !d.operator)) select.insertAdjacentHTML('beforeend', `<option value="${escape(o.displayId)}">Saved display disconnected · preview only</option>`);
       select.value = o.displayId;
     });
-    const states=await window.mapper?.outputStatus?.()??[];
+    let states:{id:string;displayId:string;fullscreen:boolean}[]=[];try{states=await window.mapper?.outputStatus?.()??[];}catch{ /* show window heartbeat if routing IPC is unavailable */ }
     rig.outputs.forEach((o,i)=>{
       const child=children.get(o.id),report=outputReports.get(o.id),state=states.find(s=>s.id===o.id);
       const open=state||child&&!child.closed;
-      $(`output-state-${i}`).textContent=!open?'Output closed':report&&performance.now()-report.at<4000&&report.ready?`${state?.fullscreen?'Fullscreen':'Preview'} · video ${report.width} × ${report.height} · ${report.frames} presented frames`:'Output open · waiting for video heartbeat';
+      $(`output-state-${i}`).textContent=routeErrors.has(o.id)?`Routing error: ${routeErrors.get(o.id)}`:!open?'Output closed':report&&performance.now()-report.at<4000&&report.ready?`${state?.fullscreen?'Fullscreen':'Preview'} · video ${report.width} × ${report.height} · ${report.frames} presented frames`:'Output open · waiting for video heartbeat';
     });
   }
   async function updateSources() {
@@ -299,27 +307,27 @@ async function start() {
       const id = value(`display-${i}`);
       if (id && rig.outputs.some((o, j) => j !== i && o.displayId === id)) { $<HTMLSelectElement>(`display-${i}`).value=rig.outputs[i].displayId;notify('That display is already assigned to another projector.', true); void updateDisplays(); return; }
       remember(); rig.outputs[i].displayId = id; saveLocal();
-      children.get(rig.outputs[i].id)?.close();
+      children.get(rig.outputs[i].id)?.close();routeErrors.delete(rig.outputs[i].id);
     };
   }
   async function sendOutput(i:number) {
       const o = rig.outputs[i];
-      if (!o.displayId) { openPreview(i); notify(`${o.name} is preview only.`); return; }
-      if (!window.mapper) { notify('Physical display routing requires the desktop app.', true); return; }
+      if (!o.displayId) { openPreview(i); routeErrors.delete(o.id);notify(`${o.name} is preview only.`); return true; }
+      if (!window.mapper) { routeErrors.set(o.id,'Desktop app required');notify('Physical display routing requires the desktop app.', true); return false; }
       openPreview(i);
       // Give Electron time to register a newly created child window.
       let lastError: unknown;
       for (let attempt = 0; attempt < 8; attempt++) {
-        try { await window.mapper.openOutput(o.id, o.displayId); notify(`${o.name} sent to its assigned display. Escape closes it.`); return; }
+        try { await window.mapper.openOutput(o.id, o.displayId); routeErrors.delete(o.id);notify(`${o.name} sent to its assigned display. Escape closes it.`); return true; }
         catch (e) { lastError = e; await new Promise(resolve => setTimeout(resolve, 100)); }
       }
-      notify(String(lastError), true);
+      routeErrors.set(o.id,String(lastError));notify(String(lastError), true);return false;
     };
   $('open-all').onclick=async()=>{
     // Open all children synchronously in the user gesture before awaiting IPC.
     rig.outputs.forEach((_,i)=>openPreview(i));
-    for(let i=0;i<3;i++)await sendOutput(i);
-    await updateDisplays();
+    const failed:string[]=[];for(let i=0;i<3;i++)if(!await sendOutput(i))failed.push(rig.outputs[i].name);
+    await updateDisplays();notify(failed.length?`Could not route: ${failed.join(', ')}. Select each output to see its routing error.`:'All outputs opened. Unassigned destinations are preview windows.',!!failed.length);
   };
   document.querySelectorAll<HTMLButtonElement>('[data-reset]').forEach(button=>button.onclick=()=>{
     if(locked)return;remember();const index=Number(button.dataset.output);resetCalibration(rig,index,button.dataset.reset as ResetPart);selected=index;activePoint=0;saveLocal();refreshControls();
@@ -370,10 +378,15 @@ async function start() {
   function closeChangedAssignments(before:Rig){rig.outputs.forEach((o,i)=>{if(o.displayId!==before.outputs[i].displayId)children.get(o.id)?.close();});}
   $('undo').onclick = () => { if (locked || !undo.length) return; redo.push(JSON.stringify(rig)); const before=rig;rig = parseRig(undo.pop()!);closeChangedAssignments(before); saveLocal(); refreshControls(); void updateDisplays(); };
   $('redo').onclick = () => { if (locked || !redo.length) return; undo.push(JSON.stringify(rig)); const before=rig;rig = parseRig(redo.pop()!);closeChangedAssignments(before); saveLocal(); refreshControls(); void updateDisplays(); };
-  $('save').onclick = () => {
-    const url = URL.createObjectURL(new Blob([JSON.stringify(rig, null, 2)], { type: 'application/json' }));
-    const a = document.createElement('a'); a.href = url; a.download = 'three-projector-rig.json'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); notify('Rig exported. Meshes, masks, overlap and display assignments included.');
-  };
+  async function exportJSON(kind:'rig'|'diagnostics',data:unknown){
+    try{
+      const text=JSON.stringify(data,null,2);
+      if(window.mapper?.exportFile){const saved=await window.mapper.exportFile(kind,text);if(saved)notify(`Saved ${kind}: ${saved}`);return;}
+      const url=URL.createObjectURL(new Blob([text],{type:'application/json'}));
+      const a=document.createElement('a');a.href=url;a.download=kind==='rig'?'three-projector-rig.json':'mapper-diagnostics.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);notify(`${kind} download requested. Check your downloads.`);
+    }catch(e){notify(`Could not export ${kind}: ${String(e)}`,true);}
+  }
+  $('save').onclick = () => void exportJSON('rig',rig);
   $('load').onclick = () => { if (!locked) $<HTMLInputElement>('file').click(); };
   $('file').onchange = async () => {
     const file = $<HTMLInputElement>('file').files?.[0]; if (!file) return;
@@ -414,7 +427,7 @@ async function start() {
 
   $('diagnostics').onclick=async()=>{
     const info={version:'0.4.0',savedAt:new Date().toISOString(),displays,outputs:await window.mapper?.outputStatus?.()??[],source:rig.source,connected,ndiStatistics,receivedSequence:sequence,receivedFps:measuredFps,presentedFps,nominalFps,frameAgeMs:lastFrameAt?Math.round(performance.now()-lastFrameAt):null,renderMs:lastRenderMs,calibrationPattern,solo,identify,blackout,monitor,receiveError,rig};
-    const url=URL.createObjectURL(new Blob([JSON.stringify(info,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='mapper-diagnostics.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    await exportJSON('diagnostics',info);
   };
   if(recovered)notify('Recovered the previous disk autosave because the latest file was unreadable. Export this rig now.',true);
 
@@ -505,10 +518,11 @@ async function start() {
       renderers[0].render(test.outputs[0],0,test,true,sourceRevision,'white');calibrationTests=calibrationTests&&pixel(0,1200,500)<5;
       renderers[0].render(test.outputs[0],0,test,false,sourceRevision,'gray');calibrationTests=calibrationTests&&Math.abs(pixel(0,1200,500)-128)<3;
       calibrationPattern='white';outputKey='';rig.outputs.forEach((_,i)=>openPreview(i));
-      const deadline=performance.now()+30000;
+      const began=performance.now(),deadline=began+30000;
       const verify=setInterval(()=>{
-        const outputStreams=rig.outputs.every(o=>{const r=outputReports.get(o.id);return r&&r.ready&&r.width===1920&&r.height===1080&&r.frames>=3&&r.pixel&&r.pixel[0]>240;});
-        if(outputStreams||performance.now()>deadline){clearInterval(verify);void window.mapper?.ready?.({outputs:renderers.length,width:shared.width,frameTextureTest:passed,calibrationTests,outputStreams});}
+        const outputStreams=rig.outputs.every(o=>{const r=outputReports.get(o.id);return r&&r.ready&&r.width===1920&&r.height===1080&&r.frames>=3&&(r.whiteFrames??0)>0&&(r.grayFrames??0)>0;});
+        calibrationPattern=Math.floor((performance.now()-began)/800)%2===0?'white':'gray';
+        if(outputStreams||performance.now()>deadline){clearInterval(verify);void window.mapper?.ready?.({outputs:renderers.length,width:shared.width,frameTextureTest:passed,calibrationTests,outputStreams,outputDetails:[...outputReports]});}
       },200);
 
     }

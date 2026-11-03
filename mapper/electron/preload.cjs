@@ -1,5 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('mapper', {
+  exportFile: (kind,text) => ipcRenderer.invoke('file:export',{kind,text}),
   readRig: () => ipcRenderer.invoke('rig:read'),
   saveRig: text => ipcRenderer.invoke('rig:save',text),
   outputStatus: () => ipcRenderer.invoke('output:status'),

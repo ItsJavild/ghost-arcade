@@ -62,7 +62,7 @@ app.whenReady().then(async () => {
       fromMain(event); clearTimeout(timeout);
       let loopback;
       try { loopback = ndi?.selfTest(); } catch (e) { error = e.message; }
-      const report = { outputStreams:info?.outputStreams===true, calibrationTests:info?.calibrationTests===true, frameTextureTest: info?.frameTextureTest === true, ndi: !!ndi, preview: info?.outputs === 3 && info?.width === 5760, outputs: info?.outputs, width: info?.width, loopback, error, platform: process.platform, arch: process.arch };
+      const report = { outputDetails:info?.outputDetails, windowCount:outputs.size, outputStreams:info?.outputStreams===true, calibrationTests:info?.calibrationTests===true, frameTextureTest: info?.frameTextureTest === true, ndi: !!ndi, preview: info?.outputs === 3 && info?.width === 5760, outputs: info?.outputs, width: info?.width, loopback, error, platform: process.platform, arch: process.arch };
       fs.writeFileSync(process.env.MAPPER_SMOKE_REPORT, JSON.stringify(report, null, 2));
       const screenshot = await main.webContents.capturePage();
       fs.writeFileSync(process.env.MAPPER_SMOKE_REPORT + '.png', screenshot.toPNG());
@@ -76,6 +76,14 @@ app.whenReady().then(async () => {
   ipcMain.handle('ndi:connect', (e, name) => { fromMain(e); if (!ndi) throw Error(error); if (typeof name !== 'string' || name.length > 2048) throw Error('Invalid source'); ndi.connect(name); lastSequence = 0; });
   ipcMain.handle('ndi:disconnect', e => { fromMain(e); ndi?.disconnect(); lastSequence = 0; });
   ipcMain.handle('ndi:frame', e => { fromMain(e); if (!ndi) return null; const frame = ndi.frame(lastSequence); if (frame) lastSequence = frame.sequence; return frame; });
+  ipcMain.handle('file:export', async (e,{kind,text})=>{
+    fromMain(e);
+    if(!['rig','diagnostics'].includes(kind)||typeof text!=='string'||Buffer.byteLength(text)>1024*1024)throw Error('Invalid export');
+    JSON.parse(text);
+    const result=await dialog.showSaveDialog(main,{title:kind==='rig'?'Export projector calibration':'Save mapper diagnostics',defaultPath:path.join(app.getPath('documents'),kind==='rig'?'three-projector-rig.json':'mapper-diagnostics.json'),filters:[{name:'JSON',extensions:['json']}]});
+    if(result.canceled||!result.filePath)return null;
+    fs.writeFileSync(result.filePath,text,'utf8');return result.filePath;
+  });
   ipcMain.handle('rig:read', e => { fromMain(e); return store.read(); });
   ipcMain.handle('rig:save', (e,text) => { fromMain(e); store.save(text); return true; });
   ipcMain.handle('output:status',e=>{fromMain(e);return [...outputs].map(([id,w])=>({id,displayId:destinations.get(id)||'',fullscreen:w.isFullScreen()}));});
