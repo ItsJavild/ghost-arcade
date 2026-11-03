@@ -23,16 +23,25 @@ jobs:
           cache: npm
           cache-dependency-path: mapper/package-lock.json
       - name: Download official NDI SDK
+        timeout-minutes: 5
         run: |
           $ErrorActionPreference = 'Stop'
           $url = 'https://downloads.ndi.tv/SDK/NDI_SDK/NDI%206%20SDK.exe'
-          Invoke-WebRequest $url -OutFile "$env:RUNNER_TEMP\ndi-sdk.exe"
+          Invoke-WebRequest $url -OutFile "$env:RUNNER_TEMP\ndi-sdk.exe" -TimeoutSec 60
+          Write-Host 'SDK downloaded; checking publisher signature'
           $sig = Get-AuthenticodeSignature "$env:RUNNER_TEMP\ndi-sdk.exe"
           if ($sig.Status -ne 'Valid') { throw "Invalid SDK signature: $($sig.Status)" }
-          $process = Start-Process "$env:RUNNER_TEMP\ndi-sdk.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/DIR=' + "$env:RUNNER_TEMP\ndi-sdk") -Wait -PassThru
-          if ($process.ExitCode -notin @(0,3010)) { throw "SDK installer exited $($process.ExitCode)" }
-          "NDI_SDK_DIR=$env:RUNNER_TEMP\ndi-sdk" >> $env:GITHUB_ENV
-          Get-ChildItem "$env:RUNNER_TEMP\ndi-sdk" | Select-Object Name
+          Invoke-WebRequest 'https://github.com/dscharrer/innoextract/releases/download/1.9/innoextract-1.9-windows.zip' -OutFile "$env:RUNNER_TEMP\innoextract.zip" -TimeoutSec 60
+          if ((Get-FileHash "$env:RUNNER_TEMP\innoextract.zip" -Algorithm MD5).Hash -ne '72d0d0dd874b6236eaa44411f4470ee1') { throw 'Extractor checksum does not match its official published release' }
+          Expand-Archive "$env:RUNNER_TEMP\innoextract.zip" "$env:RUNNER_TEMP\innoextract"
+          $extractor = Get-ChildItem "$env:RUNNER_TEMP\innoextract" -Recurse -Filter innoextract.exe | Select-Object -First 1
+          & $extractor.FullName -d "$env:RUNNER_TEMP\ndi-sdk" "$env:RUNNER_TEMP\ndi-sdk.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'SDK extraction failed' }
+          $header = Get-ChildItem "$env:RUNNER_TEMP\ndi-sdk" -Recurse -Filter Processing.NDI.Lib.h | Select-Object -First 1
+          if (-not $header) { throw 'NDI headers not found in extracted SDK' }
+          $sdk = Split-Path (Split-Path $header.FullName -Parent) -Parent
+          "NDI_SDK_DIR=$sdk" >> $env:GITHUB_ENV
+          Get-ChildItem $sdk | Select-Object Name
       - name: Install dependencies
         run: npm ci
       - name: Build and test receiver
