@@ -93,6 +93,7 @@ export class ProjectorRenderer {
   }
   render(output: Projector, index: number, rig: Rig, blackout: boolean, revision: number, diagnostic:CalibrationPattern='none') {
     const b = this.backend;
+    if(b.renderer.getContext().isContextLost())throw Error('GPU context was lost.');
     if (!b.dataMode && (this.source.width !== b.width || this.source.height !== b.height)) {
       b.texture.dispose(); b.texture = textureFor(this.source);
       b.material.uniforms.picture.value = b.texture;
