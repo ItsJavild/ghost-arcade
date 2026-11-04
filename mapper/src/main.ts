@@ -540,11 +540,15 @@ async function start() {
       calibrationPattern='white';outputKey='';rig.outputs.forEach((_,i)=>openPreview(i));
       setLiveMode(true);
       const pausedMonitorCopies=monitorCopies,pausedWarpCopies=warpCopies;
-      const began=performance.now(),deadline=began+40000;
-      let restoreStarted=false,liveModeTest=false,restoreMonitorCopies=0;
+      const began=performance.now(),deadline=began+60000;
+      let restoreStarted=false,liveModeTest=false,restoreMonitorCopies=0,probePhase: 'white'|'gray'|'white-again'='white';
       const verify=setInterval(()=>{
-        const outputStreams=rig.outputs.every(o=>{const r=outputReports.get(o.id);return r&&r.ready&&r.width===1920&&r.height===1080&&r.frames>=3&&(r.whiteFrames??0)>0&&(r.grayFrames??0)>0;});
-        calibrationPattern=Math.floor((performance.now()-began)/800)%2===0?'white':'gray';
+        // Handshake each color across all windows before switching. A wall-clock
+        // toggle can alias with a slow software GPU and skip a phase entirely.
+        const allSeen=(color:'whiteFrames'|'grayFrames',count:number)=>rig.outputs.every(o=>(outputReports.get(o.id)?.[color]??0)>=count);
+        if(probePhase==='white'&&allSeen('whiteFrames',1)){probePhase='gray';calibrationPattern='gray';}
+        else if(probePhase==='gray'&&allSeen('grayFrames',1)){probePhase='white-again';calibrationPattern='white';}
+        const outputStreams=probePhase==='white-again'&&rig.outputs.every(o=>{const r=outputReports.get(o.id);return r&&r.ready&&r.width===1920&&r.height===1080&&r.frames>=3&&(r.whiteFrames??0)>=2&&(r.grayFrames??0)>0;});
         if(outputStreams&&!restoreStarted){
           liveModeTest=liveMode&&!monitor&&monitorCopies===pausedMonitorCopies&&warpCopies===pausedWarpCopies&&$('input-monitor-panel').hidden&&Array.from(document.querySelectorAll<HTMLElement>('.projector-preview')).every(el=>el.hidden);
           restoreStarted=true;restoreMonitorCopies=monitorCopies;setLiveMode(false);
