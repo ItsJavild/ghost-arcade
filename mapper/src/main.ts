@@ -69,7 +69,7 @@ async function start() {
   let latestFrame:Frame|null=null, uploadedSequence=-1, smokeMode=false;
   let activePoint=0, sourceRevision=0, contentKey='', outputKey='', lastPreviewAt=0, presented=0, presentedFps=0, presentedSample=0, presentedAt=performance.now(), lastPresentedSequence=0, lastRenderMs=0;
   let calibrationPattern:CalibrationPattern='none',solo=false,identify=false,monitor=true,monitorSequence=-1;
-  let liveMode=false,autoLivePending=false,monitorBeforeLive=true,lockBeforeLive=false;
+  let liveMode=false,monitorBeforeLive=true,lockBeforeLive=false;
   let monitorCopies=0,warpCopies=0;
   let recoveryCopy:string|null=null, recovered=false, smokeStarted=false;
   const routeErrors=new Map<string,string>();
@@ -113,7 +113,7 @@ async function start() {
     <li><b>10–20 min · Route and identify.</b> Assign Left, Center and Right to different displays. Open all assigned outputs; enable Identify outputs to check the cables. Disable Identify afterward. Use Solo to adjust one projector without light from the others.</li>
     <li><b>20–35 min · Geometry.</b> Choose the alignment grid. Start with Perspective for corners, then Linear mesh or Bézier for curvature. Warp the full region, including overlap. Use Screen mask to clip spill. A software mask cannot remove a projector’s black-floor glow.</li>
     <li><b>35–45 min · Seams.</b> Set physical overlap in source pixels; stage width is 5760 minus both overlaps. Align matching grid lines in both seams. Use White, then 50% gray, with Solo OFF and Identify OFF. Keep Auto edge blends on initially; tune blend gamma and projector brightness if needed. Disable any projector’s internal blending to avoid double fades.</li>
-    <li><b>45–55 min · Live source.</b> Return to live input, choose NDI and Connect. ProPresenter’s output aspect should match the displayed stage size. A 1920 × 1080 input using Fit occupies only the center of a very wide stage; use a matching wide ProPresenter output. Stretch is available if distortion is intentional. Compare a source timer against the physical output for latency. On the first received NDI frame, Live mode pauses operator previews and locks calibration. Click Calibrate to resume previews and adjust the rig without disconnecting NDI. Live mode leaves NDI reception, metrics and projector outputs running.</li>
+    <li><b>45–55 min · Live source.</b> Return to live input, choose NDI and Connect. ProPresenter’s output aspect should match the displayed stage size. A 1920 × 1080 input using Fit occupies only the center of a very wide stage; use a matching wide ProPresenter output. Stretch is available if distortion is intentional. Compare a source timer against the physical output for latency. Connecting NDI keeps previews available for checking and calibration. When ready, choose Live mode or Return to live input to pause operator previews and lock calibration. Click Calibrate to resume previews without disconnecting NDI. Reception, metrics and projector outputs keep running.</li>
     <li><b>55–60 min · Save and lock.</b> Export the rig, verify all three outputs are playing, and leave Live mode enabled; it already locks calibration. Keep the exported JSON on the Windows PC. Do not open two mapper versions at once. Escape closes a focused output; reopen it from Calibration.</li></ol>
     <p class="muted">No source? Refresh sources, confirm ProPresenter NDI output is enabled, then Connect again. Calibration patterns work without NDI. A cable disconnect closes only its affected output; reconnect, Refresh displays, check its destination and reopen. Signal loss blacks live output after 2 seconds and recovers when frames resume. Blackout overrides patterns and identification.</p></div></dialog><footer>GPU mesh / mask / blend previews · Receiver runs independently of physical outputs · Escape exits fullscreen output</footer><input id="file" type="file" accept=".json,application/json" hidden>`;
   const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -153,12 +153,12 @@ async function start() {
     // and the optional input/warp copies stop. No receive/render rate is reduced.
     outputKey='';refreshControls();
   }
-  $('live-mode').onclick=()=>{autoLivePending=false;setLiveMode(!liveMode);notify(liveMode?'Live mode active. Operator previews are paused; all projector outputs keep rendering.':'Calibration previews resumed. NDI and projector outputs remain connected.');};
+  $('live-mode').onclick=()=>{setLiveMode(!liveMode);notify(liveMode?'Live mode active. Operator previews are paused; all projector outputs keep rendering.':'Calibration previews resumed. NDI and projector outputs remain connected.');};
   $('monitor-enabled').onchange=()=>{monitor=$<HTMLInputElement>('monitor-enabled').checked;lastPreviewAt=0;monitorSequence=-1;};
   $('calibration-pattern').onchange=()=>{calibrationPattern=value('calibration-pattern') as CalibrationPattern;};
   $('solo').onchange=()=>{solo=$<HTMLInputElement>('solo').checked;};
   $('identify').onchange=()=>{identify=$<HTMLInputElement>('identify').checked;};
-  $('live-output').onclick=()=>{calibrationPattern='none';solo=false;identify=false;blackout=false;$<HTMLSelectElement>('calibration-pattern').value='none';for(const id of ['solo','identify'])$<HTMLInputElement>(id).checked=false;$('blackout').textContent='Blackout outputs';$('blackout').classList.remove('blackout-on');notify('Calibration patterns and isolation cleared. Selected input is sent to all outputs.');};
+  $('live-output').onclick=()=>{calibrationPattern='none';solo=false;identify=false;blackout=false;$<HTMLSelectElement>('calibration-pattern').value='none';for(const id of ['solo','identify'])$<HTMLInputElement>(id).checked=false;$('blackout').textContent='Blackout outputs';$('blackout').classList.remove('blackout-on');setLiveMode(true);notify('Calibration patterns and isolation cleared. Selected input is sent to all outputs.');};
   const raw = $<HTMLCanvasElement>('input-preview'), rawCtx = raw.getContext('2d')!;
   const shared = document.createElement('canvas'), sharedCtx = shared.getContext('2d')!;
   const rawFrame = document.createElement('canvas'), rawFrameCtx = rawFrame.getContext('2d')!;
@@ -290,7 +290,7 @@ async function start() {
       svg.setPointerCapture(e.pointerId);svg.focus();e.preventDefault();
     });
     svg.addEventListener('pointermove',e=>{
-      if(!drag)return;
+      if(!drag)return;if(locked){drag=null;saveLocal();return;}
       const o=rig.outputs[selected], list=editMode==='mesh'?o.mesh:o.mask, p=position(e), dim=dimensions(o), factor=e.shiftKey ? .1 : 1;
       const previous=structuredClone(list);
       let dx=(p.x-drag.start.x)*factor,dy=(p.y-drag.start.y)*factor;
@@ -421,9 +421,9 @@ async function start() {
   $('refresh-displays').onclick = () => void updateDisplays();
   $('close-outputs').onclick = () => { for (const child of children.values()) child.close(); void window.mapper?.closeOutputs(); };
   $('refresh').onclick = () => void updateSources();
-  $('disconnect').onclick = async () => { autoLivePending=false;setLiveMode(false); connectionGeneration++; connected = false; sequence = 0; lastFrameAt = 0; uploadedSequence=-1; latestFrame=null; await window.mapper?.disconnect(); notify('NDI receiver disconnected.'); };
+  $('disconnect').onclick = async () => { setLiveMode(false); connectionGeneration++; connected = false; sequence = 0; lastFrameAt = 0; uploadedSequence=-1; latestFrame=null; await window.mapper?.disconnect(); notify('NDI receiver disconnected.'); };
   $('source-mode').onchange = async () => {
-    autoLivePending=false;setLiveMode(false);sourceMode = value('source-mode') as typeof sourceMode; connectionGeneration++; connected = false; sequence = 0; lastFrameAt = 0; uploadedSequence=-1; latestFrame=null; await window.mapper?.disconnect();
+    setLiveMode(false);sourceMode = value('source-mode') as typeof sourceMode; connectionGeneration++; connected = false; sequence = 0; lastFrameAt = 0; uploadedSequence=-1; latestFrame=null; await window.mapper?.disconnect();
     notify(sourceMode === 'pattern' ? 'Animated test source active. This is not an NDI reception test.' : 'Select a ProPresenter source and connect.');
   };
   $('connect').onclick = async () => {
@@ -435,7 +435,7 @@ async function start() {
     try {
       await window.mapper.connect(name);
       if (generation !== connectionGeneration) return;
-      sourceMode = 'ndi'; $<HTMLSelectElement>('source-mode').value = sourceMode; connected = true;autoLivePending=true; rig.source = name; saveLocal(); notify('Receiver started. Waiting for the first real video frame…');
+      sourceMode = 'ndi'; $<HTMLSelectElement>('source-mode').value = sourceMode; connected = true; rig.source = name; saveLocal(); notify('Receiver started. Waiting for the first real video frame…');
     } catch (e) { notify(String(e), true); }
   };
   try {
@@ -459,7 +459,6 @@ async function start() {
       if (generation !== connectionGeneration || !frame) return;
       if (!Number.isInteger(frame.width) || !Number.isInteger(frame.height) || frame.width < 1 || frame.height < 1 || frame.width > 16384 || frame.height > 8192 || frame.data.length !== frame.width * frame.height * 4) throw Error('Invalid received video frame.');
       latestFrame=frame;
-      if(autoLivePending){autoLivePending=false;setLiveMode(true);notify('NDI video received. Live mode paused operator previews to reduce resource use. Choose Calibrate for preview and warp adjustments.');}
       if(!sequence){sampleSequence=frame.sequence;sampleTime=performance.now();}
       sequence = frame.sequence; nominalFps = frame.fps; lastFrameAt = performance.now() - frame.ageMs - (performance.now()-requestedAt); receiveError = '';
       const now = performance.now();

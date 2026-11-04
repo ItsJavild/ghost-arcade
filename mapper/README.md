@@ -18,8 +18,10 @@ switching versions; 0.1.0 rigs import into 0.2.0 without discarding calibration.
 
 ## Live performance mode (0.5.0)
 
-The first received NDI frame automatically pauses operator previews and locks
-calibration. **Calibrate · previews on** resumes the input monitor and calibration
+Connecting NDI leaves previews available for checking and calibration. Choose
+**Live mode · previews off** when ready to pause operator previews and lock
+calibration. **Return to live input** also enters Live mode after clearing
+diagnostic modes and Blackout. **Calibrate · previews on** resumes the input monitor and calibration
 view without reconnecting NDI or reopening projector outputs; it restores the
 prior monitor/lock settings. **Live mode · previews off** pauses them again.
 Metrics and source-loss handling remain active. Blackout and diagnostic settings
