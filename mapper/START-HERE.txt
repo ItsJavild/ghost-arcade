@@ -28,7 +28,8 @@ ONE-HOUR SETUP
           A standard 1920x1080 input in Fit can leave the outer projectors black!
           Stretch covers the stage but distorts. Fill crops.
           Check latency on a PHYSICAL output using a running source timer.
-55-60:    Export the rig, verify all three outputs, then Lock calibration.
+55-60:    Export the rig, verify all three outputs, then leave Live mode enabled.
+          Live mode already locks calibration.
 
 QUICK RECOVERY
 - No NDI: check ProPresenter output, Refresh sources, select it, Connect again.
