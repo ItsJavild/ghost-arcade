@@ -1,4 +1,4 @@
-THREE PROJECTOR MAPPER 0.4.0 - WINDOWS x64
+THREE PROJECTOR MAPPER 0.5.0 - WINDOWS x64
 
 BEFORE LEAVING
 1. Extract the ENTIRE ZIP to a local folder. Do not run inside the ZIP.
@@ -32,7 +32,12 @@ ONE-HOUR SETUP
 
 QUICK RECOVERY
 - No NDI: check ProPresenter output, Refresh sources, select it, Connect again.
-- Too slow: disable Input monitor. This avoids its CPU pixel conversion/copy.
+- NDI automatically enters Live mode on its first frame: operator previews pause
+  and calibration locks, while reception and all projector outputs keep running.
+  Click Calibrate to resume previews without reconnecting. Return to Live mode
+  after setup. Preview suspension does not pause or lower the projector frame rate.
+- Too slow: keep Live mode enabled. It avoids input-monitor pixel conversion/copy
+  and presentation of operator calibration previews.
   Received / presented / source FPS are different measurements. NDI queue/drop
   counters and Save diagnostics help distinguish receiver and rendering issues.
 - Black output: check Blackout, Solo, calibration pattern, source, assignment,

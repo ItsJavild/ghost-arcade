@@ -15,7 +15,7 @@ type Bridge = {
   sources(): Promise<string[]>; connect(name: string): Promise<void>; disconnect(): Promise<void>;
   frame(): Promise<Frame | null>; displays(): Promise<Display[]>;
   openOutput(id: string, displayId: string): Promise<void>; closeOutputs(): Promise<void>;
-  ready?(info: { outputs: number; width: number; frameTextureTest: boolean; outputStreams?:boolean; calibrationTests?:boolean; outputDetails?:unknown }): Promise<unknown>;
+  ready?(info: { outputs: number; width: number; frameTextureTest: boolean; outputStreams?:boolean; calibrationTests?:boolean; liveModeTest?:boolean; outputDetails?:unknown }): Promise<unknown>;
 };
 declare global { interface Window { mapper?: Bridge; mapperStreams?: Record<string, MediaStream> } }
 const root = document.querySelector<HTMLDivElement>('#app')!;
@@ -69,6 +69,8 @@ async function start() {
   let latestFrame:Frame|null=null, uploadedSequence=-1, smokeMode=false;
   let activePoint=0, sourceRevision=0, contentKey='', outputKey='', lastPreviewAt=0, presented=0, presentedFps=0, presentedSample=0, presentedAt=performance.now(), lastPresentedSequence=0, lastRenderMs=0;
   let calibrationPattern:CalibrationPattern='none',solo=false,identify=false,monitor=true,monitorSequence=-1;
+  let liveMode=false,autoLivePending=false,monitorBeforeLive=true,lockBeforeLive=false;
+  let monitorCopies=0,warpCopies=0;
   let recoveryCopy:string|null=null, recovered=false, smokeStarted=false;
   const routeErrors=new Map<string,string>();
   const outputReports=new Map<string,{width:number;height:number;frames:number;ready:boolean;pixel?:number[];whiteFrames?:number;grayFrames?:number;at:number}>();
@@ -80,20 +82,20 @@ async function start() {
     if(saved?.current){try{rig=parseRig(saved.current);}catch{if(recoveryCopy){rig=parseRig(recoveryCopy);recovered=true;}}}
   } catch { /* local autosave remains available if desktop storage cannot be read */ }
   root.innerHTML = `
-    <header><div class="brand"><span class="mark">◩</span><div><h1>Three Projector Mapper <small>PROTOTYPE 0.4 · WINDOWS x64</small></h1><p>One source. Three calibrated outputs.</p></div></div><div class="actions"><button id="setup-help">Setup guide</button><button id="undo">Undo</button><button id="redo">Redo</button><button id="load">Load rig</button><button id="save">Save rig</button><button id="blackout" class="danger">Blackout outputs</button></div></header>
-    <div id="notice" role="status" aria-live="polite">Starting previews…</div>
+    <header><div class="brand"><span class="mark">◩</span><div><h1>Three Projector Mapper <small>PROTOTYPE 0.5 · WINDOWS x64</small></h1><p>One source. Three calibrated outputs.</p></div></div><div class="actions"><button id="live-mode">Live mode · previews off</button><button id="setup-help">Setup guide</button><button id="undo">Undo</button><button id="redo">Redo</button><button id="load">Load rig</button><button id="save">Save rig</button><button id="blackout" class="danger">Blackout outputs</button></div></header>
+    <div id="live-banner" class="live-banner" hidden>LIVE MODE · Operator previews paused. NDI reception and all projector outputs continue. Choose Calibrate to resume previews.</div><div id="notice" role="status" aria-live="polite">Starting previews…</div>
     <main>
       <section class="panel input"><div class="section-head"><h2><span class="step">01</span> Input</h2><span id="input-state" class="badge">TEST SOURCE</span></div>
         <div class="source-controls"><label>Source<select id="source-mode"><option value="pattern">Animated test pattern</option><option value="ndi">NDI® from ProPresenter</option></select></label><label class="grow">NDI source<select id="ndi-source"><option value="">Select a discovered source</option></select></label><button id="refresh">Refresh sources</button><button id="connect">Connect</button><button id="disconnect">Disconnect</button></div>
         <p id="runtime" class="muted"></p><label class="inline-check"><input id="monitor-enabled" type="checkbox" checked>Input monitor · disable to reduce CPU work</label>
-        <div class="input-preview"><canvas id="input-preview"></canvas><span id="source-label">TEST SOURCE · NOT NDI</span></div>
+        <div class="input-preview" id="input-monitor-panel"><canvas id="input-preview"></canvas><span id="source-label">TEST SOURCE · NOT NDI</span></div>
         <div class="metrics"><div><span>RECEIVED</span><strong id="count">—</strong></div><div><span>INPUT SIZE</span><strong id="resolution">—</strong></div><div><span>RECEIVED / PRESENTED / SOURCE FPS</span><strong id="fps">—</strong></div><div><span>APP FRAME AGE · NOT END-TO-END</span><strong id="age">—</strong></div></div>
         <p id="ndi-statistics" class="muted"></p><p class="muted attribution"><a href="https://ndi.video/" target="_blank" rel="noreferrer">NDI®</a> is a registered trademark of Vizrt NDI AB.</p>
       </section>
       <section class="panel calibration"><div class="section-head"><h2><span class="step">02</span> Calibration</h2><strong id="canvas-size"></strong></div>
         <div class="setup-tools"><button id="open-all">Open all assigned outputs</button><label>Calibration pattern<select id="calibration-pattern"><option value="none">Live input / source</option><option value="grid">Continuous alignment grid</option><option value="white">White · blend seams</option><option value="gray">50% gray · fine blend</option><option value="black">Black · projector black floor</option><option value="bars">Color bars</option></select></label><label class="inline-check"><input id="solo" type="checkbox">Solo selected projector</label><label class="inline-check"><input id="identify" type="checkbox">Identify outputs · raster labels</label><button id="live-output">Return to live input</button></div>
         <p id="output-summary" class="muted"></p><p id="aspect-warning" class="warning" hidden></p><div class="canvas-controls"><label>Left / center overlap (px)<input id="overlap" type="number" min="0" max="768" step="1"></label><label class="overlap-drag">Drag overlap<input id="overlap-slider" type="range" min="0" max="768" step="1"></label><label><input id="link-overlaps" type="checkbox" checked>Link both seams</label><label>Center / right overlap (px)<input id="right-overlap" type="number" min="0" max="768" step="1"></label><label class="overlap-drag">Drag right overlap<input id="right-overlap-slider" type="range" min="0" max="768" step="1"></label><button id="reset-overlap">Reset overlaps</button><label>Input scaling<select id="fit"><option value="contain">Fit — preserve entire input</option><option value="cover">Fill — crop to canvas</option><option value="stretch">Stretch to canvas</option></select></label><button id="refresh-displays">Refresh displays</button><button id="close-outputs">Close output windows</button></div>
-        <div id="overview" aria-label="Three-projector source crop overview"></div><p class="muted">The overview fits your window. Output resolution stays 1920 × 1080. Drag either seam handle or the overlap slider. Link both seams or adjust them independently; hatched areas contain duplicated source pixels and automatic fades.</p>
+        <div id="overview" aria-label="Three-projector source crop overview"></div><p class="muted" id="overlap-help">The overview fits your window. Output resolution stays 1920 × 1080. Drag either seam handle or the overlap slider. Link both seams or adjust them independently; hatched areas contain duplicated source pixels and automatic fades.</p>
       <div class="section-head projector-toolbar"><label>Selected projector<select id="projector-select">${rig.outputs.map((o,i)=>`<option value="${i}">${escape(o.name)}</option>`).join('')}</select></label><div class="actions"><button id="open-warp">Open warp adjustment…</button><button id="mesh-mode" class="active">Mesh warp</button><button id="mask-mode">Screen mask</button><button id="lock">Lock calibration</button></div></div>
         <div class="projectors">${rig.outputs.map((o, i) => `<article class="panel projector" data-index="${i}"><div class="section-head"><h3>${escape(o.name)}</h3><span class="badge">1920 × 1080</span></div><div class="projector-preview"><canvas id="projector-${i}"></canvas><svg id="handles-${i}" viewBox="0 0 1920 1080" tabindex="0" aria-label="${escape(o.name)} calibration handles"></svg></div><label>Output destination<select id="display-${i}"></select></label><div class="actions"><button id="preview-${i}">Open preview</button><button id="send-${i}">Send to display</button></div><p id="output-state-${i}" class="muted">Output closed</p><div class="resets">${(["mesh","mask","blend","all"] as const).map(part=>`<button data-reset="${part}" data-output="${i}">Reset ${part==='blend'?'blend/color':part}</button>`).join('')}</div></article>`).join('')}</div>
         <dialog id="warp-dialog" aria-labelledby="warp-title"><div class="panel warp-panel"><div class="section-head"><h3 id="warp-title">Warp adjustment</h3><button id="close-warp">Done</button></div><div class="section-head"><div class="actions"><label>Zoom<select id="warp-zoom"><option value="1">Fit route + margin</option><option value="1.5">150%</option><option value="2">200%</option><option value="0.5">50%</option></select></label><label><input id="show-blends" type="checkbox" checked>Show blend zones</label></div></div>
@@ -111,7 +113,7 @@ async function start() {
     <li><b>10–20 min · Route and identify.</b> Assign Left, Center and Right to different displays. Open all assigned outputs; enable Identify outputs to check the cables. Disable Identify afterward. Use Solo to adjust one projector without light from the others.</li>
     <li><b>20–35 min · Geometry.</b> Choose the alignment grid. Start with Perspective for corners, then Linear mesh or Bézier for curvature. Warp the full region, including overlap. Use Screen mask to clip spill. A software mask cannot remove a projector’s black-floor glow.</li>
     <li><b>35–45 min · Seams.</b> Set physical overlap in source pixels; stage width is 5760 minus both overlaps. Align matching grid lines in both seams. Use White, then 50% gray, with Solo OFF and Identify OFF. Keep Auto edge blends on initially; tune blend gamma and projector brightness if needed. Disable any projector’s internal blending to avoid double fades.</li>
-    <li><b>45–55 min · Live source.</b> Return to live input, choose NDI and Connect. ProPresenter’s output aspect should match the displayed stage size. A 1920 × 1080 input using Fit occupies only the center of a very wide stage; use a matching wide ProPresenter output. Stretch is available if distortion is intentional. Compare a source timer against the physical output for latency. Disable the input monitor if CPU load is high.</li>
+    <li><b>45–55 min · Live source.</b> Return to live input, choose NDI and Connect. ProPresenter’s output aspect should match the displayed stage size. A 1920 × 1080 input using Fit occupies only the center of a very wide stage; use a matching wide ProPresenter output. Stretch is available if distortion is intentional. Compare a source timer against the physical output for latency. On the first received NDI frame, Live mode pauses operator previews and locks calibration. Click Calibrate to resume previews and adjust the rig without disconnecting NDI. Live mode leaves NDI reception, metrics and projector outputs running.</li>
     <li><b>55–60 min · Save and lock.</b> Export the rig, verify all three outputs are playing, and lock calibration. Keep the exported JSON on the Windows PC. Do not open two mapper versions at once. Escape closes a focused output; reopen it from Calibration.</li></ol>
     <p class="muted">No source? Refresh sources, confirm ProPresenter NDI output is enabled, then Connect again. Calibration patterns work without NDI. A cable disconnect closes only its affected output; reconnect, Refresh displays, check its destination and reopen. Signal loss blacks live output after 2 seconds and recovers when frames resume. Blackout overrides patterns and identification.</p></div></dialog><footer>GPU mesh / mask / blend previews · Receiver runs independently of physical outputs · Escape exits fullscreen output</footer><input id="file" type="file" accept=".json,application/json" hidden>`;
   const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -125,7 +127,7 @@ async function start() {
     else $('autosave').textContent='Saved in this browser · export your rig for transfer';
   };
   const warpDialog = $<HTMLDialogElement>('warp-dialog');
-  $('open-warp').onclick = () => { $('warp-notice').hidden=true;warpDialog.showModal(); outputKey=''; refreshControls(); };
+  $('open-warp').onclick = () => { if(liveMode)return; $('warp-notice').hidden=true;warpDialog.showModal(); outputKey=''; refreshControls(); };
   $('close-warp').onclick = () => warpDialog.close();
   $('projector-select').onchange = () => { selected=Number(value('projector-select'));activePoint=0;refreshControls(); };
   $('setup-help').onclick=()=>$<HTMLDialogElement>('help-dialog').showModal();
@@ -135,6 +137,23 @@ async function start() {
     catch(e){notify(`Could not restore calibration: ${String(e)}`,true);}
   };
   $('restart-render').onclick=()=>location.reload();
+  function setLiveMode(enabled:boolean) {
+    if(enabled===liveMode)return;
+    if(enabled){monitorBeforeLive=monitor;lockBeforeLive=locked;monitor=false;locked=true;warpDialog.close();}
+    else {monitor=monitorBeforeLive;locked=lockBeforeLive;lastPreviewAt=0;monitorSequence=-1;}
+    liveMode=enabled;document.body.classList.toggle('live-mode',liveMode);
+    $('live-banner').hidden=!liveMode;
+    $('live-mode').textContent=liveMode?'Calibrate · previews on':'Live mode · previews off';
+    $('live-mode').classList.toggle('active',liveMode);
+    $<HTMLInputElement>('monitor-enabled').checked=monitor;
+    $<HTMLInputElement>('monitor-enabled').disabled=liveMode;
+    $('input-monitor-panel').hidden=liveMode;
+    document.querySelectorAll<HTMLElement>('.projector-preview').forEach(el=>el.hidden=liveMode);
+    // Keep every output canvas and capture stream alive; only operator presentation
+    // and the optional input/warp copies stop. No receive/render rate is reduced.
+    outputKey='';refreshControls();
+  }
+  $('live-mode').onclick=()=>{autoLivePending=false;setLiveMode(!liveMode);notify(liveMode?'Live mode active. Operator previews are paused; all projector outputs keep rendering.':'Calibration previews resumed. NDI and projector outputs remain connected.');};
   $('monitor-enabled').onchange=()=>{monitor=$<HTMLInputElement>('monitor-enabled').checked;lastPreviewAt=0;monitorSequence=-1;};
   $('calibration-pattern').onchange=()=>{calibrationPattern=value('calibration-pattern') as CalibrationPattern;};
   $('solo').onchange=()=>{solo=$<HTMLInputElement>('solo').checked;};
@@ -189,7 +208,7 @@ async function start() {
     const o = rig.outputs[selected];
     $<HTMLSelectElement>('projector-select').value=String(selected);
     $('warp-title').textContent=`${o.name} · ${editMode==='mesh'?'Warp adjustment':'Screen mask'}${solo?' · SOLO':''}${calibrationPattern!=='none'?' · '+calibrationPattern.toUpperCase():''}`;
-    document.querySelectorAll<HTMLElement>('.projector').forEach((card,i)=>{card.hidden=i!==selected;});
+    document.querySelectorAll<HTMLElement>('.projector').forEach((card,i)=>{card.hidden=!liveMode&&i!==selected;});
     $('selected-title').textContent = `${o.name} · ${editMode === 'mesh' ? `${o.warpType??'linear'} warp` : 'four-point projector mask'}`;
     $('edit-help').textContent = locked ? 'Calibration is locked.' : editMode === 'mesh' ? 'Select a point to edit its coordinates, or drag points and edges in Warp adjustment. Blend zones move with the warp.' : 'Drag the four mask points to clip light to the screen boundary. Mask coordinates are independent of the mesh.';
     for (const [id, v] of Object.entries({ 'blend-left': o.left * 100, 'blend-right': o.right * 100, gamma: o.gamma, brightness: o.brightness, black: o.black, overlap: rig.overlap })) $<HTMLInputElement>(id).value = String(Math.round(v * 10000) / 10000);
@@ -206,6 +225,7 @@ async function start() {
     $<HTMLInputElement>('auto-blend').checked=o.autoBlend!==false;
     $<HTMLInputElement>('blend-gamma').value=String(o.blendGamma??1);
     $('mesh-mode').classList.toggle('active', editMode === 'mesh'); $('mask-mode').classList.toggle('active', editMode === 'mask');
+    $('open-warp').toggleAttribute('disabled',liveMode);$('lock').toggleAttribute('disabled',liveMode);
     $('lock').textContent = locked ? 'Unlock calibration' : 'Lock calibration';
     for (const id of ['blend-left', 'blend-right', 'gamma', 'brightness', 'black', 'overlap', 'overlap-slider', 'reset-overlap', 'link-overlaps', 'fit', 'reset', 'warp-type', 'point-x', 'point-y', 'auto-blend', 'blend-gamma']) ($<HTMLInputElement>(id)).disabled = locked;
     for (let i = 0; i < 3; i++) $<HTMLSelectElement>(`display-${i}`).disabled = locked;
@@ -401,9 +421,9 @@ async function start() {
   $('refresh-displays').onclick = () => void updateDisplays();
   $('close-outputs').onclick = () => { for (const child of children.values()) child.close(); void window.mapper?.closeOutputs(); };
   $('refresh').onclick = () => void updateSources();
-  $('disconnect').onclick = async () => { connectionGeneration++; connected = false; sequence = 0; lastFrameAt = 0; uploadedSequence=-1; latestFrame=null; await window.mapper?.disconnect(); notify('NDI receiver disconnected.'); };
+  $('disconnect').onclick = async () => { autoLivePending=false;setLiveMode(false); connectionGeneration++; connected = false; sequence = 0; lastFrameAt = 0; uploadedSequence=-1; latestFrame=null; await window.mapper?.disconnect(); notify('NDI receiver disconnected.'); };
   $('source-mode').onchange = async () => {
-    sourceMode = value('source-mode') as typeof sourceMode; connectionGeneration++; connected = false; sequence = 0; lastFrameAt = 0; uploadedSequence=-1; latestFrame=null; await window.mapper?.disconnect();
+    autoLivePending=false;setLiveMode(false);sourceMode = value('source-mode') as typeof sourceMode; connectionGeneration++; connected = false; sequence = 0; lastFrameAt = 0; uploadedSequence=-1; latestFrame=null; await window.mapper?.disconnect();
     notify(sourceMode === 'pattern' ? 'Animated test source active. This is not an NDI reception test.' : 'Select a ProPresenter source and connect.');
   };
   $('connect').onclick = async () => {
@@ -415,7 +435,7 @@ async function start() {
     try {
       await window.mapper.connect(name);
       if (generation !== connectionGeneration) return;
-      sourceMode = 'ndi'; $<HTMLSelectElement>('source-mode').value = sourceMode; connected = true; rig.source = name; saveLocal(); notify('Receiver started. Waiting for the first real video frame…');
+      sourceMode = 'ndi'; $<HTMLSelectElement>('source-mode').value = sourceMode; connected = true;autoLivePending=true; rig.source = name; saveLocal(); notify('Receiver started. Waiting for the first real video frame…');
     } catch (e) { notify(String(e), true); }
   };
   try {
@@ -426,7 +446,7 @@ async function start() {
   await updateDisplays(); await updateSources(); refreshControls(); notify('Preview-only rig ready. No projectors required. Drag a mesh point to calibrate.');
 
   $('diagnostics').onclick=async()=>{
-    const info={version:'0.4.0',savedAt:new Date().toISOString(),displays,outputs:await window.mapper?.outputStatus?.()??[],source:rig.source,connected,ndiStatistics,receivedSequence:sequence,receivedFps:measuredFps,presentedFps,nominalFps,frameAgeMs:lastFrameAt?Math.round(performance.now()-lastFrameAt):null,renderMs:lastRenderMs,calibrationPattern,solo,identify,blackout,monitor,receiveError,rig};
+    const info={version:'0.5.0',savedAt:new Date().toISOString(),displays,outputs:await window.mapper?.outputStatus?.()??[],source:rig.source,connected,ndiStatistics,receivedSequence:sequence,receivedFps:measuredFps,presentedFps,nominalFps,frameAgeMs:lastFrameAt?Math.round(performance.now()-lastFrameAt):null,renderMs:lastRenderMs,calibrationPattern,solo,identify,blackout,monitor,liveMode,monitorCopies,warpCopies,receiveError,rig};
     await exportJSON('diagnostics',info);
   };
   if(recovered)notify('Recovered the previous disk autosave because the latest file was unreadable. Export this rig now.',true);
@@ -439,6 +459,7 @@ async function start() {
       if (generation !== connectionGeneration || !frame) return;
       if (!Number.isInteger(frame.width) || !Number.isInteger(frame.height) || frame.width < 1 || frame.height < 1 || frame.width > 16384 || frame.height > 8192 || frame.data.length !== frame.width * frame.height * 4) throw Error('Invalid received video frame.');
       latestFrame=frame;
+      if(autoLivePending){autoLivePending=false;setLiveMode(true);notify('NDI video received. Live mode paused operator previews to reduce resource use. Choose Calibrate for preview and warp adjustments.');}
       if(!sequence){sampleSequence=frame.sequence;sampleTime=performance.now();}
       sequence = frame.sequence; nominalFps = frame.fps; lastFrameAt = performance.now() - frame.ageMs - (performance.now()-requestedAt); receiveError = '';
       const now = performance.now();
@@ -470,7 +491,7 @@ async function start() {
       if(raw.width!==pw||raw.height!==ph){raw.width=pw;raw.height=ph;}
       rawCtx.fillStyle='#000';rawCtx.fillRect(0,0,pw,ph);
       if(sourceMode==='pattern')rawCtx.drawImage(shared,0,0,pw,ph);else if(live&&latestFrame){if(rawFrame.width!==w||rawFrame.height!==h){rawFrame.width=w;rawFrame.height=h;}rawFrameCtx.putImageData(new ImageData(new Uint8ClampedArray(latestFrame.data.buffer as ArrayBuffer,latestFrame.data.byteOffset,latestFrame.data.byteLength),w,h),0,0);rawCtx.drawImage(rawFrame,0,0,pw,ph);}
-      raw.style.aspectRatio=`${w}/${h}`;lastPreviewAt=now;monitorSequence=sequence;
+      monitorCopies++;raw.style.aspectRatio=`${w}/${h}`;lastPreviewAt=now;monitorSequence=sequence;
     }
     const nextOutput=JSON.stringify([rig.outputs,blackout,selected,calibrationPattern,solo,identify]);
     if(sourceDirty||outputKey!==nextOutput){
@@ -482,10 +503,10 @@ async function start() {
           ctx.fillStyle=['#14324a','#4a3614','#143d32'][i];ctx.fillRect(0,0,1920,1080);ctx.strokeStyle='#fff';ctx.lineWidth=12;ctx.strokeRect(6,6,1908,1068);ctx.fillStyle='#fff';ctx.textAlign='center';ctx.font='bold 160px Segoe UI,sans-serif';ctx.fillText(`${i+1} · ${rig.outputs[i].name}`,960,510);ctx.font='40px Segoe UI,sans-serif';ctx.fillText('RASTER IDENTIFICATION · disable before calibration',960,620);ctx.textAlign='left';
         }
       });
-      if(warpDialog.open){
+      if(!liveMode&&warpDialog.open){
       const warpCanvas=$<HTMLCanvasElement>('warp-preview');
       if(warpCanvas.width!==1920){warpCanvas.width=1920;warpCanvas.height=1080;}
-      warpCanvas.getContext('2d',{alpha:false})!.drawImage($<HTMLCanvasElement>(`projector-${selected}`),0,0);
+      warpCopies++;warpCanvas.getContext('2d',{alpha:false})!.drawImage($<HTMLCanvasElement>(`projector-${selected}`),0,0);
       }
       if(live&&sequence!==lastPresentedSequence){presented++;lastPresentedSequence=sequence;}
       outputKey=nextOutput;lastRenderMs=performance.now()-started;
@@ -518,11 +539,19 @@ async function start() {
       renderers[0].render(test.outputs[0],0,test,true,sourceRevision,'white');calibrationTests=calibrationTests&&pixel(0,1200,500)<5;
       renderers[0].render(test.outputs[0],0,test,false,sourceRevision,'gray');calibrationTests=calibrationTests&&Math.abs(pixel(0,1200,500)-128)<3;
       calibrationPattern='white';outputKey='';rig.outputs.forEach((_,i)=>openPreview(i));
-      const began=performance.now(),deadline=began+30000;
+      setLiveMode(true);
+      const pausedMonitorCopies=monitorCopies,pausedWarpCopies=warpCopies;
+      const began=performance.now(),deadline=began+40000;
+      let restoreStarted=false,liveModeTest=false,restoreMonitorCopies=0;
       const verify=setInterval(()=>{
         const outputStreams=rig.outputs.every(o=>{const r=outputReports.get(o.id);return r&&r.ready&&r.width===1920&&r.height===1080&&r.frames>=3&&(r.whiteFrames??0)>0&&(r.grayFrames??0)>0;});
         calibrationPattern=Math.floor((performance.now()-began)/800)%2===0?'white':'gray';
-        if(outputStreams||performance.now()>deadline){clearInterval(verify);void window.mapper?.ready?.({outputs:renderers.length,width:shared.width,frameTextureTest:passed,calibrationTests,outputStreams,outputDetails:[...outputReports]});}
+        if(outputStreams&&!restoreStarted){
+          liveModeTest=liveMode&&!monitor&&monitorCopies===pausedMonitorCopies&&warpCopies===pausedWarpCopies&&$('input-monitor-panel').hidden&&Array.from(document.querySelectorAll<HTMLElement>('.projector-preview')).every(el=>el.hidden);
+          restoreStarted=true;restoreMonitorCopies=monitorCopies;setLiveMode(false);
+        }
+        const restored=restoreStarted&&!liveMode&&monitor&&monitorCopies>restoreMonitorCopies&&!$('input-monitor-panel').hidden;
+        if(restored||performance.now()>deadline){clearInterval(verify);void window.mapper?.ready?.({outputs:renderers.length,width:shared.width,frameTextureTest:passed,calibrationTests,outputStreams,liveModeTest:liveModeTest&&restored,outputDetails:[...outputReports]});}
       },200);
 
     }

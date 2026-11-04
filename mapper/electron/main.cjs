@@ -64,16 +64,16 @@ app.whenReady().then(async () => {
   });
   const fromMain = e => { if (e.sender !== main.webContents) throw Error('Operator window required.'); };
   if (smoke) {
-    const timeout = setTimeout(() => { fs.writeFileSync(process.env.MAPPER_SMOKE_REPORT, JSON.stringify({ ndi: !!ndi, preview: false, error: error || 'Renderer readiness timed out' })); app.exit(1); }, 60000);
+    const timeout = setTimeout(() => { fs.writeFileSync(process.env.MAPPER_SMOKE_REPORT, JSON.stringify({ ndi: !!ndi, preview: false, error: error || 'Renderer readiness timed out' })); app.exit(1); }, 90000);
     ipcMain.handle('smoke:ready', async (event, info) => {
       fromMain(event); clearTimeout(timeout);
       let loopback;
       try { loopback = ndi?.selfTest(); } catch (e) { error = e.message; }
-      const report = { outputDetails:info?.outputDetails, windowCount:outputs.size, outputStreams:info?.outputStreams===true, calibrationTests:info?.calibrationTests===true, frameTextureTest: info?.frameTextureTest === true, ndi: !!ndi, preview: info?.outputs === 3 && info?.width === 5760, outputs: info?.outputs, width: info?.width, loopback, error, platform: process.platform, arch: process.arch };
+      const report = { outputDetails:info?.outputDetails, windowCount:outputs.size, liveModeTest:info?.liveModeTest===true, outputStreams:info?.outputStreams===true, calibrationTests:info?.calibrationTests===true, frameTextureTest: info?.frameTextureTest === true, ndi: !!ndi, preview: info?.outputs === 3 && info?.width === 5760, outputs: info?.outputs, width: info?.width, loopback, error, platform: process.platform, arch: process.arch };
       fs.writeFileSync(process.env.MAPPER_SMOKE_REPORT, JSON.stringify(report, null, 2));
       const screenshot = await main.webContents.capturePage();
       fs.writeFileSync(process.env.MAPPER_SMOKE_REPORT + '.png', screenshot.toPNG());
-      setTimeout(() => app.exit(report.ndi && report.preview && report.frameTextureTest && report.outputStreams && report.calibrationTests && loopback?.received ? 0 : 1), 100);
+      setTimeout(() => app.exit(report.ndi && report.preview && report.frameTextureTest && report.outputStreams && report.liveModeTest && report.calibrationTests && loopback?.received ? 0 : 1), 100);
       return report;
     });
   }

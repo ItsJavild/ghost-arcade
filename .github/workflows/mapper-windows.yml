@@ -79,13 +79,13 @@ jobs:
           Remove-Item Env:NDI_RUNTIME_DIR_V5,Env:NDI_RUNTIME_DIR_V6 -ErrorAction SilentlyContinue
           $app = Get-ChildItem release/win-unpacked -Filter '*.exe' | Where-Object Name -ne 'elevate.exe' | Select-Object -First 1
           $process = Start-Process $app.FullName -ArgumentList '--mapper-smoke-test' -PassThru
-          if (-not $process.WaitForExit(90000)) { $process.Kill(); throw 'Packaged app smoke test timed out' }
+          if (-not $process.WaitForExit(120000)) { $process.Kill(); throw 'Packaged app smoke test timed out' }
           $report = Get-Content $env:MAPPER_SMOKE_REPORT -Raw | ConvertFrom-Json
           $report | ConvertTo-Json -Depth 8
           Copy-Item $env:MAPPER_SMOKE_REPORT release/mapper-smoke.json
           Copy-Item ($env:MAPPER_SMOKE_REPORT + '.png') release/mapper-preview.png -ErrorAction SilentlyContinue
           if ($process.ExitCode -ne 0) { throw "Packaged smoke test exited $($process.ExitCode)" }
-          if (-not $report.ndi -or -not $report.preview -or -not $report.frameTextureTest -or -not $report.outputStreams -or -not $report.calibrationTests -or $report.outputs -ne 3) { throw 'Packaged self-test failed' }
+          if (-not $report.ndi -or -not $report.preview -or -not $report.frameTextureTest -or -not $report.outputStreams -or -not $report.liveModeTest -or -not $report.calibrationTests -or $report.outputs -ne 3) { throw 'Packaged self-test failed' }
           Copy-Item $env:MAPPER_SMOKE_REPORT release/mapper-smoke.json
           Copy-Item ($env:MAPPER_SMOKE_REPORT + '.png') release/mapper-preview.png
           Get-FileHash release/*.zip -Algorithm SHA256 | Format-List | Out-File release/SHA256.txt

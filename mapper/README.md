@@ -1,4 +1,4 @@
-# Three Projector Mapper 0.4.0
+# Three Projector Mapper 0.5.0
 
 Windows x64 projection mapper derived from Ghost Arcade. One local ProPresenter
 NDI input, one continuous stage, three independently calibrated 1920×1080
@@ -15,6 +15,27 @@ Choose the ProPresenter NDI source and Connect. Destinations can stay Preview
 only without any physical projectors. The operator monitor is reserved for
 controls. Escape closes an output window. Export your existing rig before
 switching versions; 0.1.0 rigs import into 0.2.0 without discarding calibration.
+
+## Live performance mode (0.5.0)
+
+The first received NDI frame automatically pauses operator previews and locks
+calibration. **Calibrate · previews on** resumes the input monitor and calibration
+view without reconnecting NDI or reopening projector outputs; it restores the
+prior monitor/lock settings. **Live mode · previews off** pauses them again.
+Metrics and source-loss handling remain active. Blackout and diagnostic settings
+are not changed by this performance switch, so check the output status banner.
+
+This skips input-monitor CPU conversion/copies and warp-editor preview copies,
+and hides operator canvas presentation. The three calibrated output canvases,
+shared GPU input texture and their capture streams remain alive and rendering.
+They are required to feed the actual projector windows. The Windows smoke test
+requires changing frames in all three outputs with operator previews paused,
+checks preview-copy counters stay unchanged, then verifies preview resumption.
+
+The ZIP is an already-packaged native Electron application. An NSIS installer
+would copy the same executable/runtime and add install/uninstall integration;
+it would not change this application's decoding or rendering pipeline. Keep the
+ZIP extracted to a local folder, with all DLLs and resources together.
 
 ## Setup safeguards (0.4.0)
 
