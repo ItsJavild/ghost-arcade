@@ -1,5 +1,5 @@
 import './style.css';
-import { defaultRig, automaticEdges, layout, parseRig, setOverlap, resetCalibration, overlapFromSeam, type ResetPart, type Rig } from './rig';
+import { defaultRig, automaticEdges, layout, parseRig, setOverlap, setCanvasWidth, resetCalibration, overlapFromSeam, type ResetPart, type Rig } from './rig';
 import { ProjectorRenderer, type CalibrationPattern } from './renderer';
 import { dimensions, sampleWarp, changeWarp, blendBoundary, usablePerspective, type WarpType } from './warp';
 import { drawTestPattern } from './testPatterns';
@@ -82,7 +82,7 @@ async function start() {
     if(saved?.current){try{rig=parseRig(saved.current);}catch{if(recoveryCopy){rig=parseRig(recoveryCopy);recovered=true;}}}
   } catch { /* local autosave remains available if desktop storage cannot be read */ }
   root.innerHTML = `
-    <header><div class="brand"><span class="mark">◩</span><div><h1>Three Projector Mapper <small>PROTOTYPE 0.5 · WINDOWS x64</small></h1><p>One source. Three calibrated outputs.</p></div></div><div class="actions"><button id="live-mode">Live mode · previews off</button><button id="setup-help">Setup guide</button><button id="undo">Undo</button><button id="redo">Redo</button><button id="load">Load rig</button><button id="save">Save rig</button><button id="blackout" class="danger">Blackout outputs</button></div></header>
+    <header><div class="brand"><span class="mark">◩</span><div><h1>Three Projector Mapper <small>PROTOTYPE 0.5.1 · WINDOWS x64</small></h1><p>One source. Three calibrated outputs.</p></div></div><div class="actions"><button id="live-mode">Live mode · previews off</button><button id="setup-help">Setup guide</button><button id="undo">Undo</button><button id="redo">Redo</button><button id="load">Load rig</button><button id="save">Save rig</button><button id="blackout" class="danger">Blackout outputs</button></div></header>
     <div id="live-banner" class="live-banner" hidden>LIVE MODE · Operator previews paused. NDI reception and all projector outputs continue. Choose Calibrate to resume previews.</div><div id="notice" role="status" aria-live="polite">Starting previews…</div>
     <main>
       <section class="panel input"><div class="section-head"><h2><span class="step">01</span> Input</h2><span id="input-state" class="badge">TEST SOURCE</span></div>
@@ -94,7 +94,7 @@ async function start() {
       </section>
       <section class="panel calibration"><div class="section-head"><h2><span class="step">02</span> Calibration</h2><strong id="canvas-size"></strong></div>
         <div class="setup-tools"><button id="open-all">Open all assigned outputs</button><label>Calibration pattern<select id="calibration-pattern"><option value="none">Live input / source</option><option value="grid">Continuous alignment grid</option><option value="white">White · blend seams</option><option value="gray">50% gray · fine blend</option><option value="black">Black · projector black floor</option><option value="bars">Color bars</option></select></label><label class="inline-check"><input id="solo" type="checkbox">Solo selected projector</label><label class="inline-check"><input id="identify" type="checkbox">Identify outputs · raster labels</label><button id="live-output">Return to live input</button></div>
-        <p id="output-summary" class="muted"></p><p id="aspect-warning" class="warning" hidden></p><div class="canvas-controls"><label>Left / center overlap (px)<input id="overlap" type="number" min="0" max="768" step="1"></label><label class="overlap-drag">Drag overlap<input id="overlap-slider" type="range" min="0" max="768" step="1"></label><label><input id="link-overlaps" type="checkbox" checked>Link both seams</label><label>Center / right overlap (px)<input id="right-overlap" type="number" min="0" max="768" step="1"></label><label class="overlap-drag">Drag right overlap<input id="right-overlap-slider" type="range" min="0" max="768" step="1"></label><button id="reset-overlap">Reset overlaps</button><label>Input scaling<select id="fit"><option value="contain">Fit — preserve entire input</option><option value="cover">Fill — crop to canvas</option><option value="stretch">Stretch to canvas</option></select></label><button id="refresh-displays">Refresh displays</button><button id="close-outputs">Close output windows</button></div>
+        <p id="output-summary" class="muted"></p><p id="aspect-warning" class="warning" hidden></p><div class="canvas-controls"><label>Canvas width (px)<input id="canvas-width" type="number" min="4224" max="5760" step="1"></label><label>Canvas height (px)<input value="1080" readonly aria-label="Canvas height fixed at 1080 pixels"></label><button id="canvas-4to1">Use 4320 × 1080 · 4:1 screen</button><label>Left / center overlap (px)<input id="overlap" type="number" min="0" max="768" step="1"></label><label class="overlap-drag">Drag overlap<input id="overlap-slider" type="range" min="0" max="768" step="1"></label><label><input id="link-overlaps" type="checkbox" checked>Link both seams</label><label>Center / right overlap (px)<input id="right-overlap" type="number" min="0" max="768" step="1"></label><label class="overlap-drag">Drag right overlap<input id="right-overlap-slider" type="range" min="0" max="768" step="1"></label><button id="reset-overlap">Reset overlaps</button><label>Input scaling<select id="fit"><option value="contain">Fit — preserve entire input</option><option value="cover">Fill — crop to canvas</option><option value="stretch">Stretch to canvas</option></select></label><button id="refresh-displays">Refresh displays</button><button id="close-outputs">Close output windows</button></div>
         <div id="overview" aria-label="Three-projector source crop overview"></div><p class="muted" id="overlap-help">The overview fits your window. Output resolution stays 1920 × 1080. Drag either seam handle or the overlap slider. Link both seams or adjust them independently; hatched areas contain duplicated source pixels and automatic fades.</p>
       <div class="section-head projector-toolbar"><label>Selected projector<select id="projector-select">${rig.outputs.map((o,i)=>`<option value="${i}">${escape(o.name)}</option>`).join('')}</select></label><div class="actions"><button id="open-warp">Open warp adjustment…</button><button id="mesh-mode" class="active">Mesh warp</button><button id="mask-mode">Screen mask</button><button id="lock">Lock calibration</button></div></div>
         <div class="projectors">${rig.outputs.map((o, i) => `<article class="panel projector" data-index="${i}"><div class="section-head"><h3>${escape(o.name)}</h3><span class="badge">1920 × 1080</span></div><div class="projector-preview"><canvas id="projector-${i}"></canvas><svg id="handles-${i}" viewBox="0 0 1920 1080" tabindex="0" aria-label="${escape(o.name)} calibration handles"></svg></div><label>Output destination<select id="display-${i}"></select></label><div class="actions"><button id="preview-${i}">Open preview</button><button id="send-${i}">Send to display</button></div><p id="output-state-${i}" class="muted">Output closed</p><div class="resets">${(["mesh","mask","blend","all"] as const).map(part=>`<button data-reset="${part}" data-output="${i}">Reset ${part==='blend'?'blend/color':part}</button>`).join('')}</div></article>`).join('')}</div>
@@ -212,6 +212,7 @@ async function start() {
     $('selected-title').textContent = `${o.name} · ${editMode === 'mesh' ? `${o.warpType??'linear'} warp` : 'four-point projector mask'}`;
     $('edit-help').textContent = locked ? 'Calibration is locked.' : editMode === 'mesh' ? 'Select a point to edit its coordinates, or drag points and edges in Warp adjustment. Blend zones move with the warp.' : 'Drag the four mask points to clip light to the screen boundary. Mask coordinates are independent of the mesh.';
     for (const [id, v] of Object.entries({ 'blend-left': o.left * 100, 'blend-right': o.right * 100, gamma: o.gamma, brightness: o.brightness, black: o.black, overlap: rig.overlap })) $<HTMLInputElement>(id).value = String(Math.round(v * 10000) / 10000);
+    $<HTMLInputElement>('canvas-width').value=String(layout(rig.overlap,rig.rightOverlap??rig.overlap).width);
     $<HTMLSelectElement>('fit').value = rig.fit;
     $<HTMLInputElement>('overlap-slider').value=String(rig.overlap);
     $<HTMLInputElement>('link-overlaps').checked=rig.linkOverlaps!==false;
@@ -227,7 +228,7 @@ async function start() {
     $('mesh-mode').classList.toggle('active', editMode === 'mesh'); $('mask-mode').classList.toggle('active', editMode === 'mask');
     $('open-warp').toggleAttribute('disabled',liveMode);$('lock').toggleAttribute('disabled',liveMode);
     $('lock').textContent = locked ? 'Unlock calibration' : 'Lock calibration';
-    for (const id of ['blend-left', 'blend-right', 'gamma', 'brightness', 'black', 'overlap', 'overlap-slider', 'reset-overlap', 'link-overlaps', 'fit', 'reset', 'warp-type', 'point-x', 'point-y', 'auto-blend', 'blend-gamma']) ($<HTMLInputElement>(id)).disabled = locked;
+    for (const id of ['blend-left', 'blend-right', 'gamma', 'brightness', 'black', 'overlap', 'overlap-slider', 'canvas-width', 'canvas-4to1', 'reset-overlap', 'link-overlaps', 'fit', 'reset', 'warp-type', 'point-x', 'point-y', 'auto-blend', 'blend-gamma']) ($<HTMLInputElement>(id)).disabled = locked;
     for (let i = 0; i < 3; i++) $<HTMLSelectElement>(`display-${i}`).disabled = locked;
     for(const id of ['undo','redo','load','recover-rig'])$<HTMLButtonElement>(id).disabled=locked;
     document.querySelectorAll<HTMLButtonElement>('[data-reset]').forEach(b=>b.disabled=locked);
@@ -366,6 +367,13 @@ async function start() {
   $('show-blends').onchange=handles;
   $('auto-blend').onchange=()=>{remember();const o=rig.outputs[selected];o.autoBlend=$<HTMLInputElement>('auto-blend').checked;if(o.autoBlend)Object.assign(o,automaticEdges(rig,selected));saveLocal();refreshControls();};
   $('blend-gamma').onchange=()=>{const n=Number(value('blend-gamma'));if(!Number.isFinite(n))return;remember();rig.outputs[selected].blendGamma=Math.max(.2,Math.min(4,n));saveLocal();refreshControls();};
+  function applyCanvasWidth(width:number){
+    if(locked)return;
+    try{const next=structuredClone(rig);setCanvasWidth(next,width);remember();rig=next;saveLocal();refreshControls();notify(`Canvas set to ${width} × 1080 · overlaps ${rig.overlap} / ${rig.rightOverlap} px. All projector outputs stay 1920 × 1080. Meshes, masks and display assignments preserved.`);}
+    catch(e){refreshControls();notify(String(e),true);}
+  }
+  $('canvas-width').onchange=()=>applyCanvasWidth(Number(value('canvas-width')));
+  $('canvas-4to1').onclick=()=>applyCanvasWidth(4320);
   let overlapGesture=false;
   $('overlap-slider').onpointerdown=()=>{if(!locked){remember();overlapGesture=true;}};
   $('overlap-slider').oninput=()=>{if(locked)return;if(!overlapGesture){remember();overlapGesture=true;}setOverlap(rig,Number(value('overlap-slider')));refreshControls();};
@@ -446,7 +454,7 @@ async function start() {
   await updateDisplays(); await updateSources(); refreshControls(); notify('Preview-only rig ready. No projectors required. Drag a mesh point to calibrate.');
 
   $('diagnostics').onclick=async()=>{
-    const info={version:'0.5.0',savedAt:new Date().toISOString(),displays,outputs:await window.mapper?.outputStatus?.()??[],source:rig.source,connected,ndiStatistics,receivedSequence:sequence,receivedFps:measuredFps,presentedFps,nominalFps,frameAgeMs:lastFrameAt?Math.round(performance.now()-lastFrameAt):null,renderMs:lastRenderMs,calibrationPattern,solo,identify,blackout,monitor,liveMode,monitorCopies,warpCopies,receiveError,rig};
+    const info={version:'0.5.1',savedAt:new Date().toISOString(),displays,outputs:await window.mapper?.outputStatus?.()??[],source:rig.source,connected,ndiStatistics,receivedSequence:sequence,receivedFps:measuredFps,presentedFps,nominalFps,frameAgeMs:lastFrameAt?Math.round(performance.now()-lastFrameAt):null,renderMs:lastRenderMs,calibrationPattern,solo,identify,blackout,monitor,liveMode,monitorCopies,warpCopies,receiveError,rig};
     await exportJSON('diagnostics',info);
   };
   if(recovered)notify('Recovered the previous disk autosave because the latest file was unreadable. Export this rig now.',true);

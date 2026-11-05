@@ -1,4 +1,4 @@
-# Three Projector Mapper 0.5.0
+# Three Projector Mapper 0.5.1
 
 Windows x64 projection mapper derived from Ghost Arcade. One local ProPresenter
 NDI input, one continuous stage, three independently calibrated 1920×1080
@@ -75,6 +75,15 @@ rendering. NDI SDK connection, queue and dropped-frame counters appear below the
 input metrics. **Save diagnostics** exports those counters, configuration and
 display details with no captured video. A render exception clears output canvases
 to black and offers **Restart preview engine**; reconnect/reopen afterward.
+
+## Direct canvas size (0.5.1)
+
+In Calibration, **Use 4320 × 1080 · 4:1 screen** sets both overlaps to 720px.
+Canvas width is also editable (4224–5760px with this three-projector layout);
+height stays 1080 and every physical output remains 1920×1080. Width changes
+preserve mesh, mask, colors and routing, update automatic blends, and are undoable.
+Manual blend widths remain manual. Choose Calibrate first if Live mode is active,
+and Unlock calibration if it was previously locked.
 
 ## Layout and blending
 

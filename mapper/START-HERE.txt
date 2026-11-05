@@ -1,4 +1,4 @@
-THREE PROJECTOR MAPPER 0.5.0 - WINDOWS x64
+THREE PROJECTOR MAPPER 0.5.1 - WINDOWS x64
 
 BEFORE LEAVING
 1. Extract the ENTIRE ZIP to a local folder. Do not run inside the ZIP.
@@ -18,7 +18,9 @@ ONE-HOUR SETUP
 20-35:    Choose Continuous alignment grid. Solo each projector as needed.
           Start with Perspective for corners; use Linear or Bezier for curvature.
           Warp the full region including its overlap. Use Screen mask for spill.
-35-45:    Solo OFF. Set overlaps, align matching grid lines in the physical seams,
+35-45:    For the 4:1 screen, choose Use 4320 x 1080 in Calibration. It sets
+          both overlaps to 720 pixels and keeps all projector outputs 1920x1080.
+          Solo OFF. Align matching grid lines in the physical seams,
           then choose White and 50% gray to tune blends. Auto edge blends should
           initially be ON. Avoid applying edge blending in both the projector
           and this app. Software black cannot remove projector black-floor glow.

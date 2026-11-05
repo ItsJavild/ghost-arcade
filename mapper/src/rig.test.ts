@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { defaultRig, layout, setOverlap, parseRig, sourceRect, resetCalibration, overlapFromSeam } from './rig';
+import { defaultRig, layout, setOverlap, setCanvasWidth, parseRig, sourceRect, resetCalibration, overlapFromSeam } from './rig';
 import { changeWarp, sampleWarp, usablePerspective } from './warp';
 describe('three projector calibration', () => {
   it('keeps source coordinates continuous at both overlap seams', () => {
@@ -55,6 +55,20 @@ describe('three projector calibration', () => {
     o.mesh=[{x:.1,y:.1},{x:.9,y:0},{x:0,y:1},{x:1,y:.8}];expect(usablePerspective(o)).toBe(true);
     o.mesh[3]={x:0,y:0};expect(usablePerspective(o)).toBe(false);
     o.mesh[3]={...o.mesh[2]};expect(usablePerspective(o)).toBe(false);
+  });
+  it('sets a 4:1 canvas without changing projector calibration or routing',()=>{
+    const r=defaultRig();r.outputs[0].displayId='left';r.outputs[1].mesh[12].x=.6;r.outputs[2].mask[0].x=.1;
+    const before=structuredClone(r.outputs);setCanvasWidth(r,4320);
+    expect(layout(r.overlap,r.rightOverlap)).toEqual({width:4320,height:1080,starts:[0,1200,2400]});
+    expect(r.overlap).toBe(720);expect(r.rightOverlap).toBe(720);expect(r.linkOverlaps).toBe(true);
+    expect(r.outputs.map(o=>[o.left,o.right])).toEqual([[0,.375],[.375,.375],[.375,0]]);
+    r.outputs.forEach((o,i)=>{expect(o.mesh).toEqual(before[i].mesh);expect(o.mask).toEqual(before[i].mask);expect(o.displayId).toBe(before[i].displayId);});
+    expect(parseRig(JSON.stringify(r))).toEqual(r);
+  });
+  it('sets exact odd widths, preserves manual fades and rejects impossible widths without changes',()=>{
+    const r=defaultRig();r.outputs[1].autoBlend=false;r.outputs[1].left=.2;setCanvasWidth(r,4321);
+    expect(layout(r.overlap,r.rightOverlap).width).toBe(4321);expect(r.linkOverlaps).toBe(false);expect(r.outputs[1].left).toBe(.2);
+    const saved=JSON.stringify(r);for(const width of [0,4223,5761,4320.5,NaN]){expect(()=>setCanvasWidth(r,width)).toThrow();expect(JSON.stringify(r)).toBe(saved);}
   });
   it('fits a normal input inside a wide canvas without stretching', () => {
     expect(sourceRect(1920, 1080, 5760, 1080, 'contain')).toEqual({ x: 1920, y: 0, w: 1920, h: 1080 });

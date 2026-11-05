@@ -28,6 +28,13 @@ export function setOverlap(rig: Rig, overlap: number, seam:1|2=1) {
   else if(seam===1)rig.overlap=n;else rig.rightOverlap=n;
   rig.outputs.forEach((o,i)=>{if(o.autoBlend!==false)Object.assign(o,automaticEdges(rig,i));});
 }
+// Width changes only the source regions/fades; physical outputs remain 1080p.
+export function setCanvasWidth(rig:Rig,width:number){
+  if(!Number.isInteger(width)||width<4224||width>5760)throw Error('Canvas width must be a whole number from 4224 to 5760 pixels. Projector outputs remain 1920 × 1080.');
+  const total=5760-width,left=Math.floor(total/2),right=total-left;
+  rig.overlap=left;rig.rightOverlap=right;rig.linkOverlaps=left===right;
+  rig.outputs.forEach((o,i)=>{if(o.autoBlend!==false)Object.assign(o,automaticEdges(rig,i));});
+}
 export type ResetPart = 'mesh' | 'mask' | 'blend' | 'all';
 export function resetCalibration(rig: Rig, index: number, part: ResetPart) {
   const o = rig.outputs[index];
